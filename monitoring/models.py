@@ -1,18 +1,8 @@
-import hashlib
-import secrets
-
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
 
-# Agent tokens are 256-bit random values, so a fast SHA-256 is sufficient (no
-# brute-force risk as with passwords) and lets us look tokens up by hash.
-TOKEN_BYTES = 32
-TOKEN_PREFIX_LEN = 8
-
-
-def hash_token(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
+from config.tokens import TOKEN_PREFIX_LEN, generate_token, hash_token, token_prefix
 
 
 class RemoteHost(models.Model):
@@ -46,9 +36,9 @@ class RemoteHost(models.Model):
 
     def set_new_token(self) -> str:
         """Generate a token, store only its hash, and return the plaintext once."""
-        token = secrets.token_urlsafe(TOKEN_BYTES)
+        token = generate_token()
         self.token_hash = hash_token(token)
-        self.token_prefix = token[:TOKEN_PREFIX_LEN]
+        self.token_prefix = token_prefix(token)
         return token
 
     @classmethod

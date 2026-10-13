@@ -50,7 +50,7 @@ _TAGS = {
 
 def alert_url(alert: Alert) -> str:
     if alert.device_id:
-        path = reverse("admin:devices_device_change", args=[alert.device_id])
+        path = f"/devices/{alert.device_id}"  # React dashboard route
     else:
         path = reverse("admin:monitoring_remotehost_change", args=[alert.remote_host_id])
     return settings.SITE_URL.rstrip("/") + path

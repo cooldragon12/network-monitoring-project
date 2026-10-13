@@ -3,7 +3,7 @@
 Self-hosted monitor for **your own** network: discovers LAN devices via ARP and
 alerts on unknown ones, and tracks remote hosts through lightweight agents.
 
-> Status: **Phase 4** — scanning, new-device alerts, ntfy notifications.
+> Status: **Phase 5** — React dashboard and REST API.
 
 ## Architecture
 
@@ -88,6 +88,61 @@ acknowledges their open new-device alerts.
 
 The scanning machine itself never appears in results (it does not ARP-reply to
 itself).
+
+## Dashboard
+
+A React single-page app (TypeScript, Vite, Tailwind CSS v4, Motion) in
+`frontend/`, built to static files that Django serves at `/` (same origin, so
+the session cookie and CSRF protection just work; no tokens in the browser).
+
+* Device table with Online/Offline/Unknown filters and search; unknown devices
+  are highlighted and can be bulk-approved ("Mark as known").
+* Device page: rename, set type and notes, mark known, forget, alerts, and the
+  event history timeline.
+* Alerts page: open/all, acknowledge one or all.
+* API tokens page.
+* Follows the system light/dark theme and `prefers-reduced-motion`; works on phones.
+* Data refreshes every 15 s (live WebSocket updates are Phase 7).
+
+Every page and API call requires login. Create your account with
+`docker compose exec web python manage.py createsuperuser`.
+
+The Docker image builds the frontend (multi-stage). For frontend development
+with hot reload, run Django (Docker or `manage.py runserver`) and:
+
+```bash
+cd frontend
+npm install
+npm run dev        # http://localhost:5173, proxies /api and /admin to Django on :8000
+```
+
+To serve a local build from Django without Docker: `npm run build` (outputs `frontend/dist`).
+
+## REST API
+
+All endpoints live under `/api/` and require authentication: a browser
+session (with `X-CSRFToken` on unsafe methods), or a personal API token:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://192.168.31.234:8000/api/devices/?known=false
+```
+
+Create tokens on the dashboard's **API tokens** page. They are shown once,
+stored only as a SHA-256 hash, and can be revoked; tokens cannot create tokens.
+
+| Endpoint | Methods | Notes |
+|---|---|---|
+| `devices/` | GET | `status=online\|offline`, `known=`, `random=`, `search=`, `ordering=` |
+| `devices/{id}/` | GET, PATCH, DELETE | PATCH `label`, `device_type`, `notes`, `is_known` (true also acks its new-device alerts) |
+| `devices/{id}/events/` | GET | event history |
+| `devices/mark-known/` | POST | `{"ids": [1, 2]}` |
+| `alerts/` | GET | `acknowledged=`, `kind=`, `severity=`, `device=` |
+| `alerts/{id}/acknowledge/`, `alerts/acknowledge-all/` | POST | |
+| `events/` | GET | `device=`, `event_type=` |
+| `scans/` | GET | scan runs |
+| `stats/`, `meta/` | GET | dashboard summary, choice lists |
+| `auth/session/`, `auth/login/`, `auth/logout/` | GET/POST | login is rate-limited (`LOGIN_THROTTLE_RATE`, default 10/min) |
+| `tokens/` | GET, POST, DELETE | browser session only |
 
 ## Notifications (self-hosted ntfy)
 
@@ -184,6 +239,7 @@ needs the same privileges.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest          # in-memory SQLite by default
+.venv/bin/python -m pytest          # backend; in-memory SQLite by default
+(cd frontend && npm test && npm run typecheck)
 TEST_DATABASE_URL=postgres://netmon:PASSWORD@localhost:5432/netmon .venv/bin/python -m pytest
 ```

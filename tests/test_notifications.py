@@ -88,7 +88,7 @@ def test_build_message_new_device(notify_settings, device):
     msg = build_message(alert)
     assert msg.title == "New device: Raspberry Pi Foundation"
     assert msg.priority == 4
-    assert msg.url == f"http://192.168.31.234:8000/admin/devices/device/{device.pk}/change/"
+    assert msg.url == f"http://192.168.31.234:8000/devices/{device.pk}"
 
 
 def test_build_message_random_mac_is_low_priority(notify_settings, device):

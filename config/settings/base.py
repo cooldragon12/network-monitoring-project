@@ -55,6 +55,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -100,10 +101,26 @@ AUTH_PASSWORD_VALIDATORS = [
 LOGIN_URL = "admin:login"
 
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework.authentication.SessionAuthentication"],
+    # Token auth first so unauthenticated requests get 401 + WWW-Authenticate.
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "api.authentication.ApiTokenAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
+    ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
-    "PAGE_SIZE": 100,
+    "PAGE_SIZE": 50,
+    "DEFAULT_THROTTLE_RATES": {"login": env_str("LOGIN_THROTTLE_RATE", "10/min")},
+}
+
+# Shared cache (throttling state must be shared across processes).
+# CACHE_URL=locmem:// gives a per-process cache for quick local runs without Redis.
+_cache_url = env_str("CACHE_URL", "redis://localhost:6379/1")
+CACHES = {
+    "default": (
+        {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}
+        if _cache_url.startswith("locmem:")
+        else {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": _cache_url}
+    )
 }
 
 # --- I18N / static ---------------------------------------------------------------
@@ -114,7 +131,14 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
-STATIC_ROOT = BASE_DIR / "staticfiles"
+STATIC_ROOT = Path(env_str("STATIC_ROOT", str(BASE_DIR / "staticfiles")))
+# Built React app (Vite). The Docker image builds it outside the bind mount.
+FRONTEND_DIST_DIR = Path(env_str("FRONTEND_DIST_DIR", str(BASE_DIR / "frontend" / "dist")))
+STATICFILES_DIRS = [FRONTEND_DIST_DIR] if FRONTEND_DIST_DIR.is_dir() else []
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
 
 # --- Celery ----------------------------------------------------------------------
 

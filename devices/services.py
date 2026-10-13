@@ -162,3 +162,21 @@ def process_scan_results(
         device.save(update_fields=["missed_scans", "is_online"])
 
     return summary
+
+
+def mark_known(devices: Iterable[Device]) -> tuple[int, int]:
+    """Mark devices as known and acknowledge their open new-device alerts.
+
+    Returns (devices_marked, alerts_acknowledged).
+    """
+    pks = [d.pk for d in devices if not d.is_known]
+    marked = Device.objects.filter(pk__in=pks).update(is_known=True)
+    acked = 0
+    for alert in Alert.objects.filter(
+        device_id__in=pks,
+        acknowledged=False,
+        kind__in=[Alert.Kind.NEW_DEVICE, Alert.Kind.NEW_RANDOM_MAC],
+    ):
+        alert.acknowledge()
+        acked += 1
+    return marked, acked

@@ -11,6 +11,7 @@ x-app: &app
   environment:
     DATABASE_URL: postgres://${POSTGRES_USER:-netmon}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-netmon}
     CELERY_BROKER_URL: redis://redis:6379/0
+    CACHE_URL: redis://redis:6379/1
     NOTIFY_NTFY_URL: http://ntfy:80
   volumes:
     - .:/app
@@ -102,6 +103,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-netmon}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@127.0.0.1:5432/${POSTGRES_DB:-netmon}
       CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CACHE_URL: redis://127.0.0.1:6379/1
       NOTIFY_NTFY_URL: http://127.0.0.1:8080
     command: celery -A config worker -Q scanner -c 1 -l info
 

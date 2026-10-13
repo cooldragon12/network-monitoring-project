@@ -6,3 +6,6 @@ __pycache__/
 # Downloaded IEEE OUI database (regenerate with: python -m scanner update-oui)
 scanner/data/oui.csv
 staticfiles/
+frontend/node_modules/
+frontend/dist/
+.claude/launch.json

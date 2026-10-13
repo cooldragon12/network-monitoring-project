@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 from devices.models import Device, DeviceEvent, ScanRun
-from monitoring.models import Alert
+from devices.services import mark_known
 
 
 class DeviceEventInline(admin.TabularInline):
@@ -47,19 +47,8 @@ class DeviceAdmin(admin.ModelAdmin):
 
     @admin.action(description="Mark selected as known")
     def mark_known(self, request, queryset):
-        devices = list(queryset.filter(is_known=False))
-        queryset.filter(pk__in=[d.pk for d in devices]).update(is_known=True)
-        acked = 0
-        for alert in Alert.objects.filter(
-            device__in=devices,
-            acknowledged=False,
-            kind__in=[Alert.Kind.NEW_DEVICE, Alert.Kind.NEW_RANDOM_MAC],
-        ):
-            alert.acknowledge()
-            acked += 1
-        self.message_user(
-            request, f"Marked {len(devices)} device(s) as known; acknowledged {acked} new-device alert(s)."
-        )
+        marked, acked = mark_known(queryset)
+        self.message_user(request, f"Marked {marked} device(s) as known; acknowledged {acked} new-device alert(s).")
 
     @admin.display(description="Name", ordering="label")
     def display_name(self, obj):
