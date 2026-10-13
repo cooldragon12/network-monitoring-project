@@ -160,3 +160,18 @@ LOGGING = {
 # Keep flash messages server-side: one-time agent tokens are shown via messages
 # and must not round-trip through a (signed but readable) cookie.
 MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
+
+# --- Periodic tasks ---------------------------------------------------------------
+
+from datetime import timedelta  # noqa: E402
+
+_scan_interval = timedelta(minutes=SCANNER["INTERVAL_MINUTES"])
+CELERY_BEAT_SCHEDULE = {
+    "lan-scan": {
+        "task": "devices.tasks.run_lan_scan",
+        "schedule": _scan_interval,
+        # Drop queued scans that were not picked up before the next one is due
+        # (e.g. the scanner worker was offline), instead of a backlog burst.
+        "options": {"expires": _scan_interval.total_seconds()},
+    },
+}

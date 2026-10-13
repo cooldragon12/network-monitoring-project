@@ -238,3 +238,18 @@ def test_cli_permission_denied_exit_code(monkeypatch, capsys):
 def test_cli_lookup(capsys):
     assert cli.main(["--oui-db", str(FIXTURE_DB), "lookup", "b8:27:eb:00:00:01"]) == 0
     assert "Raspberry Pi Foundation" in capsys.readouterr().out
+
+
+def test_oui_load_cached_reloads_on_change(tmp_path):
+    import os
+
+    db_file = tmp_path / "oui.csv"
+    db_file.write_text(FIXTURE_DB.read_text())
+    first = OuiDatabase.load_cached(db_file)
+    assert OuiDatabase.load_cached(db_file) is first
+
+    db_file.write_text("Registry,Assignment,Organization Name,Organization Address\nMA-L,B827EB,Renamed,X\n")
+    os.utime(db_file, (1, 1))  # force a different mtime
+    reloaded = OuiDatabase.load_cached(db_file)
+    assert reloaded is not first
+    assert reloaded.lookup("b8:27:eb:00:00:01") == "Renamed"

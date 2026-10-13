@@ -30,6 +30,7 @@ IEEE_SOURCES = (
 # Prefix lengths in hex digits, longest first.
 _PREFIX_HEX_LENGTHS = (9, 7, 6)
 _HEX_ONLY = re.compile(r"[^0-9A-Fa-f]")
+_CACHE: dict[str, tuple[tuple[str, float | None], "OuiDatabase"]] = {}
 
 
 def mac_hex(mac: str) -> str:
@@ -75,6 +76,21 @@ class OuiDatabase:
                 if len(prefix) in _PREFIX_HEX_LENGTHS and name:
                     entries[prefix] = name
         return cls(entries)
+
+    @classmethod
+    def load_cached(cls, path: str | os.PathLike = DEFAULT_DB_PATH) -> "OuiDatabase":
+        """Like load(), but reuse the parsed database until the file changes."""
+        path = Path(path)
+        try:
+            mtime = path.stat().st_mtime
+        except FileNotFoundError:
+            mtime = None
+        key = (str(path), mtime)
+        cached = _CACHE.get(str(path))
+        if cached is None or cached[0] != key:
+            cached = (key, cls.load(path))
+            _CACHE[str(path)] = cached
+        return cached[1]
 
     def lookup(self, mac: str) -> str | None:
         try:

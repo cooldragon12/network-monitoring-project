@@ -3,7 +3,7 @@
 Self-hosted monitor for **your own** network: discovers LAN devices via ARP and
 alerts on unknown ones, and tracks remote hosts through lightweight agents.
 
-> Status: **Phase 2** — scanner CLI, Django models/admin, Docker Compose.
+> Status: **Phase 3** — scheduled LAN scanning and new-device alerts.
 
 ## Architecture
 
@@ -47,6 +47,47 @@ defaults are DEBUG off and secure cookies on.
 All configuration is via environment variables; see `.env.example`. Native
 processes (`manage.py`, the scanner worker) read `.env` automatically; real
 environment variables take precedence.
+
+## Running the LAN scanner
+
+With the Docker stack up, start the scanner worker natively on the Mac:
+
+```bash
+sudo scripts/run_scanner_worker.sh
+```
+
+`beat` (in Docker) enqueues `run_lan_scan` every `SCAN_INTERVAL_MINUTES`
+(default 2) onto the `scanner` queue; this worker consumes it via
+`localhost:6379`. Scans that were not picked up before the next one is due are
+dropped instead of piling up. Celery prints a warning when run as root; to avoid
+sudo, grant your user `/dev/bpf*` access (see below) and run the script directly.
+
+One-off scan without Celery (useful for checking privileges/config):
+
+```bash
+sudo PYTHONDONTWRITEBYTECODE=1 .venv/bin/python manage.py scan_now
+```
+
+What each successful scan does:
+
+* **Never-seen MAC**: creates the device with `is_known=False`, records a
+  `new_device` event and raises an alert. Randomized/private MACs (phones with
+  Wi-Fi privacy) get a softer `new_random_mac` alert (severity *info*); normal
+  MACs get `new_device` (severity *warning*).
+* **Seen device**: marked online, `last_seen` updated; IP changes record an
+  `ip_changed` event, and returning devices an `online` event.
+* **Missing device**: after `OFFLINE_AFTER_MISSED_SCANS` (default 3)
+  consecutive misses it is marked offline with an `offline` event. Only LAN
+  devices inside the scanned subnet count.
+* **Failed or empty scans** (permission error, interface down) are recorded as
+  failed `ScanRun`s and never count as misses, so a broken scanner does not
+  mark your whole network offline.
+
+In the admin, select devices and use **Mark selected as known**; this also
+acknowledges their open new-device alerts.
+
+The scanning machine itself never appears in results (it does not ARP-reply to
+itself).
 
 ## Scanner CLI
 
