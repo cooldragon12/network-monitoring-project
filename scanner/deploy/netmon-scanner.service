@@ -1,0 +1,43 @@
+# systemd unit for the LAN scanner agent on a Raspberry Pi / Linux NAS (no Docker).
+#
+#   sudo useradd --system --no-create-home netmon
+#   sudo mkdir -p /opt/netmon-scanner /etc/netmon
+#   sudo cp -r scanner /opt/netmon-scanner/          # just the scanner/ package
+#   sudo cp scanner.env.example /etc/netmon/scanner.env   # fill in URL + token
+#   sudo chown root:netmon /etc/netmon/scanner.env && sudo chmod 640 /etc/netmon/scanner.env
+#   sudo cp scanner/deploy/netmon-scanner.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now netmon-scanner
+#   journalctl -u netmon-scanner -f
+#
+# Runs as an unprivileged user with only CAP_NET_RAW (no root), stdlib only.
+
+[Unit]
+Description=Network Monitor LAN scanner agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=netmon
+WorkingDirectory=/opt/netmon-scanner
+ExecStart=/usr/bin/python3 -m scanner agent --config /etc/netmon/scanner.env
+Restart=always
+RestartSec=10
+Environment=PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+
+# Only what ARP scanning needs.
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_PACKET AF_UNIX
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target

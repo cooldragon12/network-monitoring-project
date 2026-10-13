@@ -63,6 +63,43 @@ function StatCard({
   );
 }
 
+function ScannerBanner() {
+  const { data: stats } = useStats();
+  if (!stats) return null;
+  const scanners = stats.scanners;
+  const online = scanners.filter((s) => s.status === "online");
+  if (online.length > 0) return null;
+  const offline = scanners.find((s) => s.status === "offline");
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -6 }}
+      animate={{ opacity: 1, y: 0 }}
+      role="status"
+      className={cx(
+        "flex flex-col gap-2 rounded-2xl border px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between",
+        offline ? "border-danger/30 bg-danger/8" : "border-warn/30 bg-warn/10",
+      )}
+    >
+      <span className="flex items-start gap-2">
+        <AlertTriangleIcon size={16} className={cx("mt-0.5 shrink-0", offline ? "text-danger" : "text-warn")} />
+        {offline ? (
+          <span>
+            Scanner <strong>{offline.name}</strong> is offline (last seen {timeAgo(offline.last_checkin)}). No LAN scans
+            are running.
+          </span>
+        ) : scanners.length ? (
+          <span>Waiting for the scanner agent to check in. Start it with <code className="font-mono">sudo scripts/run_scanner.sh</code>.</span>
+        ) : (
+          <span>No LAN scanner is set up yet, so devices aren’t being discovered.</span>
+        )}
+      </span>
+      <Link to={offline ? `/hosts/${offline.id}` : "/hosts"} className="shrink-0 font-medium text-accent hover:underline">
+        {scanners.length ? "View scanner →" : "Add a scanner →"}
+      </Link>
+    </motion.div>
+  );
+}
+
 function ScanStatus() {
   const { data: stats } = useStats();
   if (!stats) return <Skeleton className="h-5 w-64" />;
@@ -146,6 +183,8 @@ export function DashboardPage() {
         </div>
         <ScanButton />
       </div>
+
+      <ScannerBanner />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         {statsPending || !d ? (

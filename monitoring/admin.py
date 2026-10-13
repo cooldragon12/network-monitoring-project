@@ -1,6 +1,6 @@
 from django.contrib import admin, messages
 
-from monitoring.models import Alert, RemoteHost
+from monitoring.models import Alert, HostCheck, HostEvent, RemoteHost
 from monitoring.notifications import enabled_channels
 from monitoring.tasks import send_alert_via_channel
 
@@ -67,13 +67,15 @@ class AlertAdmin(admin.ModelAdmin):
 
 @admin.register(RemoteHost)
 class RemoteHostAdmin(admin.ModelAdmin):
-    list_display = ("name", "status", "is_active", "last_checkin", "expected_interval_seconds", "token_prefix")
-    list_filter = ("status", "is_active")
+    list_display = ("name", "status", "is_scanner", "is_active", "last_checkin", "expected_interval_seconds", "token_prefix")
+    list_filter = ("status", "is_scanner", "is_active")
     search_fields = ("name", "reported_hostname")
     readonly_fields = (
         "token_prefix",
         "created_at",
         "last_checkin",
+        "last_ip",
+        "agent_version",
         "status",
         "reported_hostname",
         "cpu_percent",
@@ -83,6 +85,7 @@ class RemoteHostAdmin(admin.ModelAdmin):
     )
     fieldsets = (
         (None, {"fields": ("name", "expected_interval_seconds", "is_active")}),
+        ("LAN scanner", {"fields": ("is_scanner", "scan_subnet")}),
         ("Token", {"fields": ("token_prefix", "created_at")}),
         (
             "Last check-in",
@@ -90,6 +93,8 @@ class RemoteHostAdmin(admin.ModelAdmin):
                 "fields": (
                     "status",
                     "last_checkin",
+                    "last_ip",
+                    "agent_version",
                     "reported_hostname",
                     "cpu_percent",
                     "mem_percent",
@@ -119,3 +124,23 @@ class RemoteHostAdmin(admin.ModelAdmin):
             host.is_active = True
             host.save(update_fields=["token_hash", "token_prefix", "is_active"])
             _show_token_once(request, host, token)
+
+
+@admin.register(HostCheck)
+class HostCheckAdmin(admin.ModelAdmin):
+    list_display = ("host", "kind", "target", "port", "status", "enabled", "last_checked_at", "last_latency_ms")
+    list_filter = ("kind", "status", "enabled")
+    search_fields = ("host__name", "target")
+    readonly_fields = ("status", "consecutive_failures", "last_checked_at", "last_latency_ms", "last_error")
+
+
+@admin.register(HostEvent)
+class HostEventAdmin(admin.ModelAdmin):
+    list_display = ("timestamp", "host", "event_type")
+    list_filter = ("event_type",)
+    search_fields = ("host__name",)
+    date_hierarchy = "timestamp"
+    readonly_fields = ("host", "event_type", "timestamp", "details")
+
+    def has_add_permission(self, request):
+        return False

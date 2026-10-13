@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildUrl, errorMessage, readCookie } from "../api/client";
-import { isScanStale, pluralize, timeAgo } from "./format";
+import { formatDuration, isScanStale, pluralize, timeAgo } from "./format";
 
 const NOW = new Date("2026-10-13T12:00:00Z").getTime();
 
@@ -52,5 +52,15 @@ describe("api client helpers", () => {
     );
     expect(errorMessage({ non_field_errors: ["Bad."] }, 400)).toBe("Bad.");
     expect(errorMessage(null, 500)).toBe("Request failed (HTTP 500)");
+  });
+});
+
+describe("formatDuration", () => {
+  it("formats compactly", () => {
+    expect(formatDuration(null)).toBe("—");
+    expect(formatDuration(42)).toBe("42s");
+    expect(formatDuration(45 * 60)).toBe("45m");
+    expect(formatDuration(3 * 3600 + 20 * 60)).toBe("3h 20m");
+    expect(formatDuration(12 * 86400 + 4 * 3600)).toBe("12d 4h");
   });
 });

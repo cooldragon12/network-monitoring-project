@@ -1,0 +1,38 @@
+# systemd unit for the Network Monitor host agent (Linux: Pi, NAS, VPS).
+#
+#   sudo useradd --system --no-create-home netmon
+#   sudo install -D -m 755 agent.py /opt/netmon/agent.py
+#   sudo install -D -m 640 -g netmon agent.env.example /etc/netmon/agent.env   # fill in URL + token
+#   sudo cp netmon-agent.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now netmon-agent
+#   journalctl -u netmon-agent -f
+#
+# Needs no privileges at all.
+
+[Unit]
+Description=Network Monitor host agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=netmon
+ExecStart=/usr/bin/python3 /opt/netmon/agent.py --config /etc/netmon/agent.env
+Restart=always
+RestartSec=15
+Environment=PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=48M
+
+[Install]
+WantedBy=multi-user.target

@@ -4,11 +4,10 @@ import pytest
 from django.urls import reverse
 from django.utils import timezone
 
-from devices import tasks
-from devices.models import Device, DeviceEvent, ScanRun
+from devices.models import Device, DeviceEvent
 from devices.services import process_scan_results
 from monitoring.models import Alert
-from scanner.arp_scan import DiscoveredHost, PermissionDeniedError
+from scanner.arp_scan import DiscoveredHost
 
 pytestmark = pytest.mark.django_db
 
@@ -172,89 +171,6 @@ def test_hostname_updated_but_label_and_vendor_preserved():
     assert pi.hostname == "pi.lan"
     assert pi.label == "Garage Pi"
     assert pi.vendor == "Custom vendor"
-
-
-# --- Celery task ------------------------------------------------------------------
-
-@pytest.fixture
-def scanner_settings(settings):
-    settings.SCANNER = {**settings.SCANNER, "SUBNET": SUBNET, "OFFLINE_AFTER_MISSED_SCANS": 3}
-    return settings
-
-
-def test_task_records_successful_scan(scanner_settings, monkeypatch):
-    calls = {}
-
-    def fake_scan(subnet, **kwargs):
-        calls["subnet"] = subnet
-        return [PI, NAS]
-
-    monkeypatch.setattr(tasks, "scan", fake_scan)
-    result = tasks.run_lan_scan.delay().get()
-
-    assert calls["subnet"] == SUBNET
-    run = ScanRun.objects.get()
-    assert run.status == ScanRun.Status.SUCCESS
-    assert run.devices_found == 2
-    assert run.finished_at is not None
-    assert sorted(result["new_devices"]) == sorted([PI.mac, NAS.mac])
-
-
-def test_task_failed_scan_does_not_mark_devices_missing(scanner_settings, monkeypatch):
-    Device.objects.create(mac=PI.mac, ip=PI.ip, is_online=True)
-
-    def denied(subnet, **kwargs):
-        raise PermissionDeniedError("raw socket access denied")
-
-    monkeypatch.setattr(tasks, "scan", denied)
-    for _ in range(5):
-        tasks.run_lan_scan()
-
-    assert Device.objects.get(mac=PI.mac).is_online
-    assert Device.objects.get(mac=PI.mac).missed_scans == 0
-    assert ScanRun.objects.filter(status=ScanRun.Status.FAILED).count() == 5
-    assert "denied" in ScanRun.objects.first().error
-
-
-def test_task_empty_scan_is_treated_as_failure(scanner_settings, monkeypatch):
-    Device.objects.create(mac=PI.mac, ip=PI.ip, is_online=True)
-    monkeypatch.setattr(tasks, "scan", lambda subnet, **kw: [])
-    for _ in range(5):
-        tasks.run_lan_scan()
-    assert Device.objects.get(mac=PI.mac).is_online
-    assert ScanRun.objects.filter(status=ScanRun.Status.FAILED).count() == 5
-
-
-def test_task_unexpected_error_marks_run_failed(scanner_settings, monkeypatch):
-    def boom(subnet, **kwargs):
-        raise RuntimeError("kaboom")
-
-    monkeypatch.setattr(tasks, "scan", boom)
-    with pytest.raises(RuntimeError):
-        tasks.run_lan_scan()
-    run = ScanRun.objects.get()
-    assert run.status == ScanRun.Status.FAILED and "kaboom" in run.error
-
-
-def test_task_auto_detects_subnet(settings, monkeypatch):
-    settings.SCANNER = {**settings.SCANNER, "SUBNET": "", "INTERFACE": None}
-    seen = {}
-    monkeypatch.setattr(tasks, "detect_local_subnet", lambda: (SUBNET, "en0"))
-
-    def fake_scan(subnet, iface=None, **kwargs):
-        seen.update(subnet=subnet, iface=iface)
-        return [PI]
-
-    monkeypatch.setattr(tasks, "scan", fake_scan)
-    tasks.run_lan_scan()
-    assert seen == {"subnet": SUBNET, "iface": "en0"}
-
-
-def test_beat_schedule_and_routing(settings):
-    entry = settings.CELERY_BEAT_SCHEDULE["lan-scan"]
-    assert entry["task"] == "devices.tasks.run_lan_scan"
-    assert entry["schedule"] == timedelta(minutes=settings.SCANNER["INTERVAL_MINUTES"])
-    assert settings.CELERY_TASK_ROUTES["devices.tasks.run_lan_scan"]["queue"] == "scanner"
 
 
 # --- Admin action ---------------------------------------------------------------------

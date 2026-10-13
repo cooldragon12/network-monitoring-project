@@ -72,6 +72,23 @@ def cmd_lookup(args) -> int:
     return 0
 
 
+def cmd_agent(args) -> int:
+    from scanner import agent
+
+    try:
+        cfg = agent.load_config(
+            args.config,
+            NETMON_SERVER_URL=args.server,
+            NETMON_TOKEN_FILE=args.token_file,
+            NETMON_INTERFACE=args.iface,
+            NETMON_BACKEND=args.backend,
+        )
+    except (agent.ConfigError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return agent.run(cfg, once=args.once)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m scanner", description=__doc__)
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
@@ -91,6 +108,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--allow-large", action="store_true", help="allow subnets larger than /22")
     p.set_defaults(func=cmd_scan)
 
+    p = sub.add_parser("agent", help="run the scanner agent that reports to the Network Monitor server")
+    p.add_argument("-c", "--config", help="KEY=VALUE file with NETMON_* settings")
+    p.add_argument("--server", help="server URL (overrides NETMON_SERVER_URL)")
+    p.add_argument("--token-file", help="file containing the agent token")
+    p.add_argument("-i", "--iface", help="network interface to scan on")
+    p.add_argument("-b", "--backend", choices=BACKENDS, help="scan backend (default: auto)")
+    p.add_argument("--once", action="store_true", help="one heartbeat (and scan if due), then exit")
+    p.set_defaults(func=cmd_agent)
+
     p = sub.add_parser("detect", help="print the auto-detected subnet and interface")
     p.set_defaults(func=cmd_detect)
 
@@ -106,8 +132,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.WARNING,
-        format="%(levelname)s %(name)s: %(message)s",
+        level=logging.DEBUG if args.verbose else (logging.INFO if args.command == "agent" else logging.WARNING),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     try:
         return args.func(args)

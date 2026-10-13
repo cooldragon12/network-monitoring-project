@@ -112,6 +112,7 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "login": env_str("LOGIN_THROTTLE_RATE", "10/min"),
         "scan": "6/min",
+        "agent": env_str("AGENT_THROTTLE_RATE", "120/min"),
     },
 }
 
@@ -151,10 +152,6 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_DEFAULT_QUEUE = "default"
-# The LAN scan runs on a dedicated queue consumed only by a worker that sits on
-# the LAN with raw-socket privileges (see README). Never run scans in web requests.
-SCANNER_QUEUE = "scanner"
-CELERY_TASK_ROUTES = {"devices.tasks.run_lan_scan": {"queue": SCANNER_QUEUE}}
 
 # --- Scanner -----------------------------------------------------------------------
 
@@ -165,6 +162,14 @@ SCANNER = {
     "INTERVAL_MINUTES": env_int("SCAN_INTERVAL_MINUTES", 2),
     "OFFLINE_AFTER_MISSED_SCANS": env_int("OFFLINE_AFTER_MISSED_SCANS", 3),
     "TIMEOUT_SECONDS": env_int("SCAN_TIMEOUT_SECONDS", 2),
+    # How often scanner agents poll the server (scan-now latency).
+    "HEARTBEAT_SECONDS": env_int("SCANNER_HEARTBEAT_SECONDS", 5),
+}
+
+# Remote hosts / agents. A host is offline after
+# expected_interval_seconds * OFFLINE_GRACE without a check-in.
+AGENTS = {
+    "OFFLINE_GRACE": 2,
 }
 
 # --- Email (optional notification channel, off unless configured) ------------------
@@ -192,14 +197,16 @@ MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
 
 from datetime import timedelta  # noqa: E402
 
-_scan_interval = timedelta(minutes=SCANNER["INTERVAL_MINUTES"])
 CELERY_BEAT_SCHEDULE = {
-    "lan-scan": {
-        "task": "devices.tasks.run_lan_scan",
-        "schedule": _scan_interval,
-        # Drop queued scans that were not picked up before the next one is due
-        # (e.g. the scanner worker was offline), instead of a backlog burst.
-        "options": {"expires": _scan_interval.total_seconds()},
+    "check-agents": {
+        "task": "monitoring.tasks.check_agents",
+        "schedule": timedelta(seconds=30),
+        "options": {"expires": 30},
+    },
+    "run-host-checks": {
+        "task": "monitoring.tasks.run_host_checks",
+        "schedule": timedelta(seconds=15),
+        "options": {"expires": 15},
     },
 }
 

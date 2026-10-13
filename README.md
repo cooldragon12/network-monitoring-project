@@ -1,72 +1,101 @@
 # Network Device Monitor
 
 Self-hosted monitor for **your own** network: discovers LAN devices via ARP and
-alerts on unknown ones, and tracks remote hosts through lightweight agents.
+alerts on unknown ones, and tracks hosts (this PC, a Pi, a NAS, a VPS) through
+lightweight agents.
 
-> Status: **Phase 5** — React dashboard and REST API.
+> Status: **Phase 6**: LAN scanner agent, host agents and server-side checks.
 
 ## Architecture
 
 ```
- Docker Compose (this Mac)                         Native on the Mac (on the LAN)
- ┌──────────────────────────────────────────┐      ┌───────────────────────────────┐
- │ web (Django)   worker (queue: default)   │      │ scanner worker (queue: scanner)│
- │ beat (schedules)  ntfy (:8080)           │◄────►│ needs raw-socket privileges    │
- │ db (Postgres :5432)  redis (:6379)       │      │ ARP-scans 192.168.31.0/24      │
- └──────────────────────────────────────────┘      └───────────────────────────────┘
-   db/redis on 127.0.0.1 only; web/ntfy on WEB_BIND/NTFY_BIND (default 127.0.0.1)
+ Docker Compose (server)                                Agents (standalone, HTTP only)
+ ┌───────────────────────────────────────────┐        ┌─────────────────────────────────┐
+ │ web (Django + React)  ◄── /api/agent/* ───┼────────┤ scanner agent: on a LAN machine │
+ │ worker: notifications, host checks        │        │   ARP-scans, reports results    │
+ │ beat:   offline detection, check schedule │        ├─────────────────────────────────┤
+ │ db (Postgres)  redis  ntfy                │◄───────┤ host agent: any Linux/macOS box │
+ └───────────────────────────────────────────┘        │   CPU / mem / disk / uptime     │
+                                                       └─────────────────────────────────┘
 ```
 
-Scans run only in the `scanner` Celery queue, never inside a web request.
-Docker Desktop on macOS cannot see the LAN at layer 2, so the scanner worker
-runs natively. On a Linux host, `docker compose --profile linux-scanner up`
-runs it in a container instead (`network_mode: host` + `NET_RAW`/`NET_ADMIN`).
+* **The scanner agent** (`python -m scanner agent`) runs on any machine on
+  the LAN: this PC for now, a Raspberry Pi or NAS later. It never touches the
+  database or Redis. It heartbeats the server every 5 s; the server decides
+  when a scan is due (every `SCAN_INTERVAL_MINUTES`, or **Scan now**), the agent
+  sweeps the subnet and posts the results. Scans never run in the web app.
+* **The host agent** (`agent/agent.py`, one file, stdlib only) reports health.
+  A host that misses its check-in window goes offline with a critical alert,
+  and a scanner is a host too, so you hear about a dead scanner.
+* **Checks**: the server can also ping / TCP-connect / HTTP-GET hosts that
+  can't run an agent.
+
+Docker Desktop on macOS can't see the LAN at layer 2, so on this PC the scanner
+agent runs natively; on a Linux Pi/NAS it can run in its own tiny container.
 
 **Double NAT note:** this network sits behind a Xiaomi router (192.168.31.1),
 which itself sits behind the main router (192.168.1.1). ARP does not cross
 routers, so devices on 192.168.1.0/24 are invisible from here. To monitor that
-segment, run a second scanner on a machine connected to it.
+segment, add a second scanner on a machine connected to it and set its subnet.
 
 ## Setup
 
 ```bash
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m scanner update-oui   # downloads IEEE vendor DB (a few MB) to scanner/data/oui.csv
+.venv/bin/python -m scanner update-oui   # IEEE vendor DB (a few MB); the server uses it for vendors
 
-cp .env.example .env                     # then fill in DJANGO_SECRET_KEY and POSTGRES_PASSWORD
+cp .env.example .env                     # fill in DJANGO_SECRET_KEY and POSTGRES_PASSWORD
                                          # (and the same password inside DATABASE_URL)
 docker compose up -d --build
 docker compose exec web python manage.py createsuperuser
 ```
 
-Admin: <http://127.0.0.1:8000/admin/>. For plain-HTTP local development set
-`DJANGO_DEBUG=true` and `DJANGO_SECURE_COOKIES=false` in `.env`; production
-defaults are DEBUG off and secure cookies on.
+Dashboard: <http://127.0.0.1:8000/> (or `SITE_URL`). For plain-HTTP local
+development set `DJANGO_DEBUG=true` and `DJANGO_SECURE_COOKIES=false` in
+`.env`; production defaults are DEBUG off and secure cookies on.
 
 All configuration is via environment variables; see `.env.example`. Native
-processes (`manage.py`, the scanner worker) read `.env` automatically; real
-environment variables take precedence.
+processes (`manage.py`) read `.env` automatically; real environment variables
+take precedence.
 
-## Running the LAN scanner
+## LAN scanner agent
 
-With the Docker stack up, start the scanner worker natively on the Mac:
+1. Dashboard → **Hosts** → **Add host**, tick **LAN scanner**. Copy the token
+   (shown once) and the setup snippet.
+2. Run the agent on a machine on the LAN:
 
-```bash
-sudo scripts/run_scanner_worker.sh
-```
-
-`beat` (in Docker) enqueues `run_lan_scan` every `SCAN_INTERVAL_MINUTES`
-(default 2) onto the `scanner` queue; this worker consumes it via
-`localhost:6379`. Scans that were not picked up before the next one is due are
-dropped instead of piling up. Celery prints a warning when run as root; to avoid
-sudo, grant your user `/dev/bpf*` access (see below) and run the script directly.
-
-One-off scan without Celery (useful for checking privileges/config):
+**This PC (macOS/Linux, native):**
 
 ```bash
-sudo PYTHONDONTWRITEBYTECODE=1 .venv/bin/python manage.py scan_now
+cp scanner.env.example scanner.env      # set NETMON_SERVER_URL and NETMON_TOKEN
+sudo scripts/run_scanner.sh             # raw sockets need root here
 ```
+
+**Raspberry Pi / Linux NAS, Docker** (stdlib only, ~25 MB RAM):
+
+```bash
+docker build -f scanner/Dockerfile -t netmon-scanner .     # on the Pi, from a checkout
+docker run -d --name netmon-scanner --restart unless-stopped \
+  --network host --cap-drop ALL --cap-add NET_RAW \
+  -e NETMON_SERVER_URL=http://192.168.31.234:8000 -e NETMON_TOKEN=... netmon-scanner
+```
+
+If the whole stack runs on a Linux box on the LAN, use
+`docker compose --profile scanner up -d` with `NETMON_SCANNER_TOKEN` in `.env`.
+
+**Raspberry Pi / Linux NAS, systemd** (no Docker, unprivileged user with only
+`CAP_NET_RAW`, 64 MB memory cap): see `scanner/deploy/netmon-scanner.service`.
+
+| Backend | Platforms | Peak memory (measured) | Needs |
+|---|---|---|---|
+| `raw` (default on Linux) | Linux | ~25 MB | `CAP_NET_RAW` |
+| `scapy` (default on macOS) | macOS, Linux | ~82 MB | root / BPF access |
+| `arp-scan` | both | external binary | root |
+
+The server owns the configuration: subnet (per host, else `SCAN_SUBNET`, else
+the agent auto-detects), interval, and timeout. Vendors and the random-MAC flag
+are worked out server-side, so the agent stays small and isn't trusted for them.
 
 What each successful scan does:
 
@@ -81,13 +110,60 @@ What each successful scan does:
   devices inside the scanned subnet count.
 * **Failed or empty scans** (permission error, interface down) are recorded as
   failed `ScanRun`s and never count as misses, so a broken scanner does not
-  mark your whole network offline.
-
-In the admin, select devices and use **Mark selected as known**; this also
-acknowledges their open new-device alerts.
+  mark your whole network offline. A scan whose agent never reports back is
+  closed as failed after 5 minutes.
 
 The scanning machine itself never appears in results (it does not ARP-reply to
-itself).
+itself). For debugging without the agent: `sudo .venv/bin/python manage.py scan_now`.
+
+## Hosts and agents
+
+Every machine running an agent is a **host** with its own token (stored only as
+a SHA-256 hash, shown once, rotatable, revocable by disabling the host).
+Add hosts on the dashboard's **Hosts** page or in the Django admin.
+
+**Host agent** (Linux or macOS, Python 3.9+, no packages, no privileges):
+
+```bash
+NETMON_SERVER_URL=http://192.168.31.234:8000 NETMON_TOKEN=... python3 agent/agent.py
+python3 agent/agent.py --print           # show what it would send
+```
+
+Permanent install: `agent/netmon-agent.service` (systemd, unprivileged, sandboxed)
+with `agent/agent.env.example`. It reports hostname, uptime, CPU, memory and
+disk every `NETMON_INTERVAL` seconds (default 60), with backoff when the server
+is unreachable.
+
+* **Offline detection**: `beat` runs `check_agents` every 30 s. A host with no
+  check-in for 2 × its expected interval goes offline: event + critical
+  `host_offline` alert (max-priority push). It comes back online on its next
+  check-in, and the event records how long it was down.
+* **Checks** (per host, on the host page): `ping` (unprivileged ICMP), `tcp`
+  (connect to a port), `http` (GET, success below status 400). After
+  `failure_threshold` consecutive failures (default 2) a check goes down and
+  raises a `check_failed` alert; recovery is recorded in the host history.
+* **Rate limiting**: agent endpoints are limited per host
+  (`AGENT_THROTTLE_RATE`, default 120/min).
+
+## Remote access (Twingate) and HTTPS
+
+The dashboard, ntfy and agent API are meant to stay on your LAN. To reach them
+from outside, **don't port-forward**. Use your Twingate network:
+
+1. Run a Twingate **Connector** on a machine on the LAN (Docker on this PC,
+   the Pi or the NAS).
+2. Add a **Resource** for this PC's LAN IP (`192.168.31.234`) with ports
+   `8000` (dashboard + agent API) and `8080` (ntfy).
+3. Phone/laptop with the Twingate client: open `SITE_URL` and get ntfy
+   alerts away from home, with notification links working unchanged.
+4. Agents outside the LAN (e.g. a VPS): install Twingate's headless Linux
+   client with a Service Account, then point `NETMON_SERVER_URL` at the LAN
+   address as usual.
+
+Twingate encrypts traffic end to end. If you ever do expose the app publicly,
+or want HTTPS on the LAN, put **Caddy** in front: see `deploy/Caddyfile.example`
+for the matching `.env` settings (`DJANGO_BEHIND_HTTPS_PROXY`, secure cookies,
+`CSRF_TRUSTED_ORIGINS`). Agents accept a private CA via `NETMON_CA_FILE`.
 
 ## Dashboard
 
@@ -97,57 +173,53 @@ the session cookie and CSRF protection just work; no tokens in the browser).
 
 * Device table with Online/Offline/Unknown filters and search; unknown devices
   are highlighted and can be bulk-approved ("Mark as known").
-* Device page: rename, set type and notes, mark known, forget, alerts, and the
-  event history timeline.
-* Alerts page: open/all, acknowledge one or all.
-* API tokens page.
+* Device page: rename, set type and notes, mark known, forget, alerts, history.
+* **Scan now** asks the online scanner(s) to scan at their next heartbeat
+  (≤ 5 s) and follows the scan to a result toast. A banner warns when no
+  scanner is set up or the scanner is offline.
+* Hosts: status, metrics, checks, history; add hosts (token + setup snippet
+  shown once), rotate tokens, set the scan subnet.
+* Alerts (open/all, acknowledge one or all) and personal API tokens.
 * Follows the system light/dark theme and `prefers-reduced-motion`; works on phones.
 * Data refreshes every 15 s (live WebSocket updates are Phase 7).
-* **Scan now** queues an immediate scan for the scanner worker (it never runs in
-  the web request) and follows it to a result toast. Duplicate requests while a
-  scan is queued/running are refused; a request the worker doesn't pick up
-  within 2 minutes expires instead of running later.
 
-Every page and API call requires login. Create your account with
-`docker compose exec web python manage.py createsuperuser`.
-
-The Docker image builds the frontend (multi-stage). For frontend development
-with hot reload, run Django (Docker or `manage.py runserver`) and:
+Every page and API call requires login. For frontend development with hot reload:
 
 ```bash
-cd frontend
-npm install
-npm run dev        # http://localhost:5173, proxies /api and /admin to Django on :8000
+cd frontend && npm install && npm run dev   # http://localhost:5173, proxies /api and /admin to :8000
 ```
-
-To serve a local build from Django without Docker: `npm run build` (outputs `frontend/dist`).
 
 ## REST API
 
-All endpoints live under `/api/` and require authentication: a browser
-session (with `X-CSRFToken` on unsafe methods), or a personal API token:
+All dashboard endpoints live under `/api/` and require a browser session (with
+`X-CSRFToken` on unsafe methods) or a personal API token:
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" http://192.168.31.234:8000/api/devices/?known=false
 ```
 
-Create tokens on the dashboard's **API tokens** page. They are shown once,
-stored only as a SHA-256 hash, and can be revoked; tokens cannot create tokens.
+Personal tokens (dashboard → **API tokens**) are shown once, stored hashed and
+revocable; they cannot create tokens or hosts. Agent tokens only work on
+`/api/agent/*`, and personal tokens never do.
 
 | Endpoint | Methods | Notes |
 |---|---|---|
 | `devices/` | GET | `status=online\|offline`, `known=`, `random=`, `search=`, `ordering=` |
 | `devices/{id}/` | GET, PATCH, DELETE | PATCH `label`, `device_type`, `notes`, `is_known` (true also acks its new-device alerts) |
-| `devices/{id}/events/` | GET | event history |
+| `devices/{id}/events/`, `events/` | GET | event history (`device=`, `event_type=`) |
 | `devices/mark-known/` | POST | `{"ids": [1, 2]}` |
-| `alerts/` | GET | `acknowledged=`, `kind=`, `severity=`, `device=` |
+| `alerts/` | GET | `acknowledged=`, `kind=`, `severity=`, `device=`, `remote_host=` |
 | `alerts/{id}/acknowledge/`, `alerts/acknowledge-all/` | POST | |
-| `events/` | GET | `device=`, `event_type=` |
 | `scans/` | GET | scan runs |
-| `scan/` | POST | queue an immediate scan: `202`, `409` if one is queued/running, `503` if Redis is down; 6/min |
-| `stats/`, `meta/` | GET | dashboard summary, choice lists |
-| `auth/session/`, `auth/login/`, `auth/logout/` | GET/POST | login is rate-limited (`LOGIN_THROTTLE_RATE`, default 10/min) |
+| `scan/` | POST | ask scanners to scan now: `202`; `409` if queued/running; `503` if no scanner online; 6/min |
+| `hosts/` | GET, POST, PATCH, DELETE | POST returns the token once (browser session only) |
+| `hosts/{id}/rotate-token/`, `hosts/{id}/events/` | POST / GET | rotate: browser session only |
+| `checks/` | GET, POST, PATCH, DELETE | `host=` filter |
+| `stats/`, `meta/` | GET | dashboard summary (incl. scanners), choice lists |
+| `auth/session/`, `auth/login/`, `auth/logout/` | GET/POST | login rate-limited (`LOGIN_THROTTLE_RATE`, 10/min) |
 | `tokens/` | GET, POST, DELETE | browser session only |
+| `agent/checkin/` | POST | host agent (agent token) |
+| `agent/scanner/heartbeat/`, `agent/scanner/scans/`, `agent/scanner/scans/{id}/` | POST | scanner agent (agent token, host must be a scanner) |
 
 ## Notifications (self-hosted ntfy)
 
@@ -180,21 +252,18 @@ In the ntfy phone app, add a subscription to topic `netmon-alerts` on server
   through ntfy.sh. Set `NTFY_UPSTREAM_BASE_URL=https://ntfy.sh`; only a
   content-free "poll" nudge goes out, and the message itself is fetched from
   your server.
-* **Away from home:** ntfy and the dashboard are LAN-only, so your phone gets
-  alerts only on home Wi-Fi unless you add Tailscale/WireGuard (Phase 6 notes).
-* **Static IP:** links and the ntfy server use this Mac's LAN IP. Reserve it
+* **Away from home:** use Twingate (above) so the phone can reach ntfy.
+* **Static IP:** links and the ntfy server use this PC's LAN IP. Reserve it
   in the Xiaomi router's DHCP settings so it doesn't change.
-
-Behaviour:
 
 | Alert | ntfy priority |
 |---|---|
-| `new_device` (warning) | 4 (high) |
+| `new_device` (warning), `check_failed` (warning) | 4 (high) |
 | `new_random_mac` (info) | 2 (low); disable with `NOTIFY_RANDOM_MAC=false` |
-| `host_offline` (critical, Phase 6) | 5 (max) |
+| `host_offline` (critical) | 5 (max) |
 
 * Each alert is sent once per channel, after it is committed to the database.
-  Notifications link to the device page (`SITE_URL`).
+  Notifications link to the device/host page (`SITE_URL`).
 * **Cooldown:** a repeat alert of the same kind for the same device/host within
   `NOTIFY_COOLDOWN_MINUTES` (default 60) is marked *suppressed* and not sent.
 * **Retry:** network errors, HTTP 5xx and 429 are retried up to 5 times with
@@ -207,44 +276,36 @@ Behaviour:
 ## Scanner CLI
 
 ```bash
-.venv/bin/python -m scanner detect                          # show auto-detected subnet + interface
-sudo .venv/bin/python -m scanner scan                       # scan the auto-detected subnet
+.venv/bin/python -m scanner detect                          # auto-detected subnet + interface
+sudo .venv/bin/python -m scanner scan                       # one-off local scan, prints a table
 sudo .venv/bin/python -m scanner scan 192.168.31.0/24 --json
 .venv/bin/python -m scanner lookup b8:27:eb:12:34:56        # vendor lookup, no privileges needed
+.venv/bin/python -m scanner agent --help                    # the scanner agent (see above)
 ```
 
-Useful `scan` options: `-i/--iface`, `-b/--backend {auto,scapy,arp-scan}`,
+Useful `scan` options: `-i/--iface`, `-b/--backend {auto,raw,scapy,arp-scan}`,
 `-t/--timeout`, `-r/--retries`, `--no-resolve` (skip reverse DNS), `--json`.
-
 Safety rails: only private IPv4 ranges are accepted, and anything larger than a
 `/22` needs `--allow-large`. Exit code `77` means the scan lacked privileges.
 
-Output fields: `mac`, `ip`, `hostname` (reverse DNS, often blank on home LANs),
-`vendor` (offline OUI lookup), and `locally_administered`: true for
-randomized/private MACs (iOS/Android/Windows Wi-Fi privacy), which have no
-vendor and can change per network or over time.
-
 ## Scanner privileges
 
-ARP discovery sends raw Ethernet frames, so it needs elevated access. The scan
-must also run **on a machine attached to the LAN being scanned**: ARP does not
-cross routers or VPNs.
+ARP discovery sends raw Ethernet frames, so it needs elevated access, and it
+must run **on a machine attached to the LAN being scanned** (ARP does not cross
+routers or VPNs).
 
 | Platform | Option |
 |---|---|
-| macOS | `sudo .venv/bin/python -m scanner scan`, **or** give your user read/write on `/dev/bpf*` (Wireshark's *ChmodBPF* helper does this via the `access_bpf` group), then no sudo needed. |
-| Linux (sudo) | `sudo .venv/bin/python -m scanner scan` |
-| Linux (capabilities) | `sudo setcap cap_net_raw,cap_net_admin+eip "$(readlink -f .venv/bin/python)"`. Note this applies to the **real interpreter binary** (the venv's `python` is a symlink), so every script run by that interpreter gets the capability. Prefer a dedicated interpreter or a dedicated service user. |
-| Docker (Linux host) | The scanner container needs `network_mode: host` and `cap_add: [NET_RAW, NET_ADMIN]`. |
-| Docker Desktop (macOS/Windows) | Containers run inside a VM, so **host networking cannot see your LAN at Layer 2**. Run the scanner natively on the Mac, or on a Linux box (e.g. a Pi) on the LAN. |
-
-The optional `arp-scan` backend (`brew install arp-scan` / `apt install arp-scan`)
-needs the same privileges.
+| macOS | `sudo scripts/run_scanner.sh`, **or** give your user read/write on `/dev/bpf*` (Wireshark's *ChmodBPF* helper, `access_bpf` group) and run it without sudo. |
+| Linux, systemd | `AmbientCapabilities=CAP_NET_RAW` for an unprivileged user (the shipped unit does this). |
+| Linux, Docker | `--network host --cap-drop ALL --cap-add NET_RAW`. |
+| Linux, ad hoc | `sudo`, or `setcap cap_net_raw+eip` on the **real** interpreter binary (affects every script it runs, so prefer the systemd unit). |
+| Docker Desktop (macOS/Windows) | Containers run inside a VM, so **host networking cannot see your LAN at layer 2**. Run the agent natively instead. |
 
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest          # backend; in-memory SQLite by default
+.venv/bin/python -m pytest          # backend + agents; in-memory SQLite by default
 (cd frontend && npm test && npm run typecheck)
 TEST_DATABASE_URL=postgres://netmon:PASSWORD@localhost:5432/netmon .venv/bin/python -m pytest
 ```

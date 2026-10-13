@@ -24,6 +24,10 @@ function AlertRow({ alert, compact }: { alert: Alert; compact?: boolean }) {
     <Link to={`/devices/${alert.device}`} className="font-medium hover:text-accent">
       {alert.subject_name}
     </Link>
+  ) : alert.remote_host ? (
+    <Link to={`/hosts/${alert.remote_host}`} className="font-medium hover:text-accent">
+      {alert.subject_name}
+    </Link>
   ) : (
     <span className="font-medium">{alert.subject_name}</span>
   );

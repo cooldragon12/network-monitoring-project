@@ -2,12 +2,13 @@ import { LayoutGroup, motion } from "motion/react";
 import { Navigate, NavLink, Outlet, useLocation } from "react-router";
 
 import { useLogout, useSession, useStats } from "../api/hooks";
-import { BellIcon, GridIcon, KeyIcon, LogOutIcon, LogoIcon } from "./icons";
+import { BellIcon, GridIcon, KeyIcon, LogOutIcon, LogoIcon, ServerIcon } from "./icons";
 import { cx, Spinner } from "./ui";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: GridIcon, end: true },
   { to: "/alerts", label: "Alerts", icon: BellIcon, end: false },
+  { to: "/hosts", label: "Hosts", icon: ServerIcon, end: false },
   { to: "/tokens", label: "API tokens", icon: KeyIcon, end: false },
 ];
 

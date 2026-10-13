@@ -96,3 +96,19 @@ def send_alert_via_channel(self, alert_id: int, channel: str) -> str:
         raise
     _record_success(alert_id, channel)
     return "sent"
+
+
+@shared_task(name="monitoring.tasks.check_agents")
+def check_agents() -> dict:
+    """Flag hosts/scanners that stopped checking in; close abandoned scan runs."""
+    from devices.scanning import fail_stale_runs
+    from monitoring.agents import mark_overdue_hosts_offline
+
+    return {"offline": mark_overdue_hosts_offline(), "stale_scans_closed": fail_stale_runs()}
+
+
+@shared_task(name="monitoring.tasks.run_host_checks")
+def run_host_checks() -> int:
+    from monitoring.checks import run_due_checks
+
+    return run_due_checks()

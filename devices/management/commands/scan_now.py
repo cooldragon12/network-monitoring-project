@@ -2,12 +2,11 @@ import json
 
 from django.core.management.base import BaseCommand
 
-from devices.tasks import perform_lan_scan
+from devices.scanning import scan_locally
 
 
 class Command(BaseCommand):
-    help = "Run one LAN scan synchronously (needs raw-socket privileges, e.g. sudo)."
+    help = "Run one LAN scan in this process (debugging; needs root/CAP_NET_RAW). Normally the scanner agent scans."
 
     def handle(self, *args, **options):
-        result = perform_lan_scan()
-        self.stdout.write(json.dumps(result, indent=2))
+        self.stdout.write(json.dumps(scan_locally(), indent=2))

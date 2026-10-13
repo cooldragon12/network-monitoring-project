@@ -13,6 +13,8 @@ import "./index.css";
 import { AlertsPage } from "./pages/AlertsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DeviceDetailPage } from "./pages/DeviceDetailPage";
+import { HostDetailPage } from "./pages/HostDetailPage";
+import { HostsPage } from "./pages/HostsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { TokensPage } from "./pages/TokensPage";
@@ -44,6 +46,8 @@ const router = createBrowserRouter([
       { index: true, element: <DashboardPage /> },
       { path: "devices/:id", element: <DeviceDetailPage /> },
       { path: "alerts", element: <AlertsPage /> },
+      { path: "hosts", element: <HostsPage /> },
+      { path: "hosts/:id", element: <HostDetailPage /> },
       { path: "tokens", element: <TokensPage /> },
       { path: "*", element: <NotFoundPage /> },
     ],

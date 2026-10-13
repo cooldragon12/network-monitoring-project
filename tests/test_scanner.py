@@ -32,7 +32,7 @@ def fake_backend(monkeypatch):
         return list(replies)
 
     monkeypatch.setattr(arp_scan, "_scapy_scan", fake)
-    monkeypatch.setattr(arp_scan, "_scapy_available", lambda: True)
+    monkeypatch.setattr(arp_scan, "pick_backend", lambda: "scapy")
     return replies
 
 

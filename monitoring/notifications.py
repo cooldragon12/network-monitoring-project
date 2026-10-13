@@ -11,7 +11,6 @@ from dataclasses import dataclass
 
 from django.conf import settings
 from django.core.mail import send_mail
-from django.urls import reverse
 
 from monitoring.models import Alert
 
@@ -49,10 +48,8 @@ _TAGS = {
 
 
 def alert_url(alert: Alert) -> str:
-    if alert.device_id:
-        path = f"/devices/{alert.device_id}"  # React dashboard route
-    else:
-        path = reverse("admin:monitoring_remotehost_change", args=[alert.remote_host_id])
+    # React dashboard routes.
+    path = f"/devices/{alert.device_id}" if alert.device_id else f"/hosts/{alert.remote_host_id}"
     return settings.SITE_URL.rstrip("/") + path
 
 

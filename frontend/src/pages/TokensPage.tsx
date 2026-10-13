@@ -3,54 +3,12 @@ import { useState, type FormEvent } from "react";
 
 import { useCreateToken, useDeleteToken, useTokens } from "../api/hooks";
 import type { ApiToken, CreatedApiToken } from "../api/types";
-import { ConfirmDialog, Dialog } from "../components/Dialog";
-import { CopyIcon, KeyIcon, TrashIcon } from "../components/icons";
+import { ConfirmDialog } from "../components/Dialog";
+import { KeyIcon, TrashIcon } from "../components/icons";
+import { SecretDialog } from "../components/SecretDialog";
 import { useToast } from "../components/Toasts";
 import { Button, Card, EmptyState, ErrorNote, Mono, Skeleton } from "../components/ui";
 import { formatDateTime, timeAgo } from "../lib/format";
-
-function NewTokenDialog({ token, onClose }: { token: CreatedApiToken | null; onClose: () => void }) {
-  const { toast } = useToast();
-  const [copied, setCopied] = useState(false);
-
-  async function copy() {
-    if (!token) return;
-    try {
-      await navigator.clipboard.writeText(token.token);
-      setCopied(true);
-      toast("Token copied to clipboard");
-    } catch {
-      toast("Copy failed: select the token and copy it manually", "error");
-    }
-  }
-
-  return (
-    <Dialog
-      open={token !== null}
-      onClose={() => {
-        setCopied(false);
-        onClose();
-      }}
-      title={`Token "${token?.name ?? ""}" created`}
-      description="Copy it now. For your security it is stored only as a hash and will never be shown again."
-      actions={
-        <Button variant="primary" onClick={onClose}>
-          {copied ? "Done" : "I've saved it"}
-        </Button>
-      }
-    >
-      <div className="flex items-center gap-2 rounded-lg border border-line bg-canvas p-2 pl-3">
-        <Mono className="min-w-0 flex-1 break-all select-all">{token?.token}</Mono>
-        <Button size="sm" variant="secondary" onClick={copy} aria-label="Copy token">
-          <CopyIcon size={14} />
-        </Button>
-      </div>
-      <p className="mt-3 text-xs text-muted">
-        Use it as <Mono>Authorization: Bearer &lt;token&gt;</Mono>.
-      </p>
-    </Dialog>
-  );
-}
 
 export function TokensPage() {
   const tokens = useTokens();
@@ -141,7 +99,11 @@ export function TokensPage() {
         )}
       </Card>
 
-      <NewTokenDialog token={created} onClose={() => setCreated(null)} />
+      <SecretDialog secret={created?.token ?? null} title={`Token "${created?.name ?? ""}" created`} onClose={() => setCreated(null)}>
+        <p className="mt-3 text-xs text-muted">
+          Use it as <Mono>Authorization: Bearer &lt;token&gt;</Mono>.
+        </p>
+      </SecretDialog>
       <ConfirmDialog
         open={revoking !== null}
         onClose={() => setRevoking(null)}

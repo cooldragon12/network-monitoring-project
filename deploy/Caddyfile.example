@@ -1,0 +1,25 @@
+# HTTPS reverse proxy for Network Monitor (https://caddyserver.com).
+# Only needed if you expose the dashboard/agent API beyond the LAN, or want
+# HTTPS on the LAN. Then set in .env:
+#   DJANGO_BEHIND_HTTPS_PROXY=true  DJANGO_SECURE_COOKIES=true
+#   DJANGO_ALLOWED_HOSTS=monitor.example.com
+#   DJANGO_CSRF_TRUSTED_ORIGINS=https://monitor.example.com
+#   SITE_URL=https://monitor.example.com
+# and keep WEB_BIND/NTFY_BIND=127.0.0.1 so only Caddy can reach the app.
+
+# Public name with an automatic Let's Encrypt certificate:
+monitor.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8000
+}
+
+ntfy.example.com {
+	reverse_proxy 127.0.0.1:8080
+}
+
+# LAN-only HTTPS with Caddy's internal CA instead (install Caddy's root cert on
+# your devices; agents can trust it via NETMON_CA_FILE):
+# monitor.lan {
+# 	tls internal
+# 	reverse_proxy 127.0.0.1:8000
+# }

@@ -9,3 +9,5 @@ staticfiles/
 frontend/node_modules/
 frontend/dist/
 .claude/launch.json
+scanner.env
+agent/agent.env

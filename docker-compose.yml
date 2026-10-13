@@ -1,9 +1,9 @@
 # Local development stack. Copy .env.example to .env first.
 #
-# The LAN scanner worker is NOT in the default stack: on macOS/Windows, Docker
+# The LAN scanner agent is NOT in the default stack: on macOS/Windows, Docker
 # Desktop runs containers in a VM that cannot see your LAN at layer 2, so run
-# the scanner natively (see README). On a Linux host you can instead enable the
-# containerised scanner with:  docker compose --profile linux-scanner up
+# it natively (scripts/run_scanner.sh) or on a Pi/NAS. On a Linux host on the
+# LAN you can run it here with:  docker compose --profile scanner up -d
 
 x-app: &app
   build: .
@@ -93,19 +93,23 @@ services:
     <<: *app
     command: celery -A config beat -l info --schedule /tmp/celerybeat-schedule
 
-  # Linux hosts only: ARP scanning needs the host's network and raw sockets.
+  # LAN scanner agent, for when this stack runs on a Linux host that sits on the
+  # LAN (e.g. a NAS): docker compose --profile scanner up -d
+  # Tiny stdlib-only image (~25 MB RAM). On macOS/Windows Docker Desktop cannot
+  # see the LAN at layer 2: run scripts/run_scanner.sh natively instead.
   scanner:
-    <<: *app
-    profiles: ["linux-scanner"]
+    profiles: ["scanner"]
+    build:
+      context: .
+      dockerfile: scanner/Dockerfile
     network_mode: host
-    cap_add: [NET_RAW, NET_ADMIN]
-    user: root
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-netmon}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@127.0.0.1:5432/${POSTGRES_DB:-netmon}
-      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
-      CACHE_URL: redis://127.0.0.1:6379/1
-      NOTIFY_NTFY_URL: http://127.0.0.1:8080
-    command: celery -A config worker -Q scanner -c 1 -l info
+      NETMON_SERVER_URL: ${NETMON_SCANNER_SERVER_URL:-http://127.0.0.1:8000}
+      NETMON_TOKEN: ${NETMON_SCANNER_TOKEN:-}
+    mem_limit: 64m
+    restart: unless-stopped
 
 volumes:
   pgdata:

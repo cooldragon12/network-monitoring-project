@@ -5,6 +5,12 @@ import type {
   Alert,
   ApiToken,
   CreatedApiToken,
+  CreatedRemoteHost,
+  HostCheck,
+  HostCheckInput,
+  HostEvent,
+  RemoteHost,
+  RemoteHostInput,
   Device,
   DeviceEvent,
   DeviceUpdate,
@@ -27,6 +33,9 @@ export const keys = {
   deviceEvents: (id: number) => ["device", id, "events"] as const,
   alerts: (filters?: AlertFilters) => ["alerts", filters ?? {}] as const,
   tokens: ["tokens"] as const,
+  hosts: ["hosts"] as const,
+  host: (id: number) => ["hosts", id] as const,
+  hostEvents: (id: number) => ["hosts", id, "events"] as const,
 };
 
 // --- Session ------------------------------------------------------------------------
@@ -160,6 +169,7 @@ export function useDeleteDevice() {
 export interface AlertFilters {
   acknowledged?: boolean;
   device?: number;
+  remote_host?: number;
 }
 
 export function useAlerts(filters: AlertFilters = {}) {
@@ -206,5 +216,91 @@ export function useDeleteToken() {
   return useMutation({
     mutationFn: (id: number) => api<void>(`tokens/${id}/`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.tokens }),
+  });
+}
+
+// --- Hosts (agents) and checks -------------------------------------------------------------
+
+export function useHosts() {
+  return useQuery({ queryKey: keys.hosts, queryFn: () => api<RemoteHost[]>("hosts/"), refetchInterval: REFRESH_MS });
+}
+
+export function useHost(id: number) {
+  return useQuery({
+    queryKey: keys.host(id),
+    queryFn: () => api<RemoteHost>(`hosts/${id}/`),
+    refetchInterval: REFRESH_MS,
+  });
+}
+
+export function useHostEvents(id: number) {
+  return useQuery({
+    queryKey: keys.hostEvents(id),
+    queryFn: () => api<HostEvent[]>(`hosts/${id}/events/`),
+    refetchInterval: REFRESH_MS,
+  });
+}
+
+function useInvalidateHosts() {
+  const qc = useQueryClient();
+  return () =>
+    Promise.all([keys.hosts, keys.stats, ["alerts"]].map((queryKey) => qc.invalidateQueries({ queryKey })));
+}
+
+export function useCreateHost() {
+  const invalidate = useInvalidateHosts();
+  return useMutation({
+    mutationFn: (data: RemoteHostInput) => api<CreatedRemoteHost>("hosts/", { method: "POST", body: data }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateHost(id: number) {
+  const invalidate = useInvalidateHosts();
+  return useMutation({
+    mutationFn: (data: RemoteHostInput) => api<RemoteHost>(`hosts/${id}/`, { method: "PATCH", body: data }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteHost() {
+  const invalidate = useInvalidateHosts();
+  return useMutation({
+    mutationFn: (id: number) => api<void>(`hosts/${id}/`, { method: "DELETE" }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRotateHostToken() {
+  const invalidate = useInvalidateHosts();
+  return useMutation({
+    mutationFn: (id: number) =>
+      api<{ id: number; token_prefix: string; token: string }>(`hosts/${id}/rotate-token/`, { method: "POST" }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useCreateCheck() {
+  const invalidate = useInvalidateHosts();
+  return useMutation({
+    mutationFn: (data: HostCheckInput) => api<HostCheck>("checks/", { method: "POST", body: data }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateCheck() {
+  const invalidate = useInvalidateHosts();
+  return useMutation({
+    mutationFn: ({ id, ...data }: Partial<HostCheckInput> & { id: number }) =>
+      api<HostCheck>(`checks/${id}/`, { method: "PATCH", body: data }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteCheck() {
+  const invalidate = useInvalidateHosts();
+  return useMutation({
+    mutationFn: (id: number) => api<void>(`checks/${id}/`, { method: "DELETE" }),
+    onSuccess: invalidate,
   });
 }

@@ -103,7 +103,7 @@ def test_build_message_remote_host(notify_settings):
     alert = Alert.objects.create(remote_host=host, kind=Alert.Kind.HOST_OFFLINE, severity="critical", message="m")
     msg = build_message(alert)
     assert msg.priority == 5
-    assert msg.url.endswith(f"/admin/monitoring/remotehost/{host.pk}/change/")
+    assert msg.url == f"http://192.168.31.234:8000/hosts/{host.pk}"
 
 
 # --- ntfy transport ----------------------------------------------------------------------

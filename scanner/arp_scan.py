@@ -3,8 +3,10 @@
 Sending raw ARP frames needs elevated privileges (root, CAP_NET_RAW on Linux,
 or read/write access to /dev/bpf* on macOS). See README.md for details.
 
-Two backends are supported:
-  * ``scapy``    – pure Python, the default.
+Backends (``auto`` picks the first available, in this order):
+  * ``raw``      – pure-stdlib AF_PACKET sockets, Linux only. Tiny footprint
+                   (no scapy); the default on a Raspberry Pi / NAS.
+  * ``scapy``    – works on macOS and Linux; heavier (~60 MB RSS).
   * ``arp-scan`` – the external ``arp-scan`` binary, if installed.
 """
 
@@ -19,11 +21,12 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass
 from typing import Iterable
 
+from scanner import linux_arp
 from scanner.oui import OuiDatabase, is_locally_administered, mac_hex
 
 logger = logging.getLogger(__name__)
 
-BACKENDS = ("auto", "scapy", "arp-scan")
+BACKENDS = ("auto", "raw", "scapy", "arp-scan")
 
 # Refuse to sweep anything larger than this without allow_large=True.
 # A /22 is 1022 hosts, already bigger than a typical home LAN.
@@ -112,6 +115,16 @@ def pick_connected_network(
 
 def detect_local_subnet() -> tuple[str, str]:
     """Return ``(subnet, interface)`` for the default-route interface."""
+    if linux_arp.available():
+        iface = linux_arp.default_interface()
+        if not iface:
+            raise ScanError("could not determine the default-route interface")
+        try:
+            _ip, network = linux_arp.interface_network(iface)
+        except OSError as exc:
+            raise ScanError(f"could not read the address of {iface}: {exc}") from exc
+        return str(network), iface
+
     from scapy.all import conf
 
     iface, local_ip, _gateway = conf.route.route("0.0.0.0")
@@ -128,6 +141,19 @@ def _looks_like_permission_error(exc: BaseException) -> bool:
         return True
     text = str(exc).lower()
     return "permission" in text or "operation not permitted" in text
+
+
+def _raw_scan(
+    network: ipaddress.IPv4Network, iface: str | None, timeout: float, retries: int
+) -> list[tuple[str, str]]:
+    try:
+        return linux_arp.arp_scan(network, iface=iface, timeout=timeout, retries=retries)
+    except PermissionError as exc:
+        raise PermissionDeniedError(
+            "raw socket access denied: run as root or grant CAP_NET_RAW (see README 'Scanner privileges')"
+        ) from exc
+    except OSError as exc:
+        raise ScanError(f"raw ARP scan failed: {exc}") from exc
 
 
 def _scapy_scan(
@@ -192,6 +218,12 @@ def _arp_scan_cli(
     return parse_arp_scan_output(proc.stdout)
 
 
+def pick_backend() -> str:
+    if linux_arp.available():
+        return "raw"
+    return "scapy" if _scapy_available() else "arp-scan"
+
+
 def _scapy_available() -> bool:
     try:
         import scapy  # noqa: F401
@@ -236,8 +268,10 @@ def scan(
     if backend not in BACKENDS:
         raise ScanError(f"unknown backend {backend!r}; choose from {BACKENDS}")
     if backend == "auto":
-        backend = "scapy" if _scapy_available() else "arp-scan"
-    scan_fn = _scapy_scan if backend == "scapy" else _arp_scan_cli
+        backend = pick_backend()
+    if backend == "raw" and not linux_arp.available():
+        raise ScanError("the raw backend needs Linux (AF_PACKET); use scapy or arp-scan")
+    scan_fn = {"raw": _raw_scan, "scapy": _scapy_scan, "arp-scan": _arp_scan_cli}[backend]
     logger.info("Scanning %s with %s (iface=%s)", network, backend, iface or "default")
     raw_pairs = scan_fn(network, iface, timeout, retries)
 

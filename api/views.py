@@ -9,7 +9,7 @@ from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
@@ -20,12 +20,16 @@ from api.serializers import (
     ApiTokenSerializer,
     DeviceEventSerializer,
     DeviceSerializer,
+    HostCheckSerializer,
+    HostEventSerializer,
     LoginSerializer,
+    RemoteHostSerializer,
     ScanRunSerializer,
 )
 from devices.models import Device, DeviceEvent, ScanRun
 from devices.services import mark_known
-from devices.tasks import ScanAlreadyPending, ScanQueueUnavailable, request_lan_scan, scan_requested
+from devices.scanning import NoScannerOnline, ScanAlreadyPending, request_lan_scan, scan_requested
+from monitoring.models import HostCheck, RemoteHost
 from monitoring.models import Alert
 
 _TRUE = {"1", "true", "yes"}
@@ -245,7 +249,7 @@ class ScanRunViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ScanNowView(APIView):
-    """Queue an immediate LAN scan for the scanner worker; returns at once."""
+    """Ask the scanner agent(s) to scan at their next heartbeat; returns at once."""
 
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "scan"
@@ -256,9 +260,9 @@ class ScanNowView(APIView):
             request_lan_scan()
         except ScanAlreadyPending:
             return Response({"detail": "A scan is already queued or running."}, status=status.HTTP_409_CONFLICT)
-        except ScanQueueUnavailable:
+        except NoScannerOnline:
             return Response(
-                {"detail": "Could not reach the task queue (is Redis running?)."},
+                {"detail": "No scanner agent is online. Start it on a machine on your LAN (see README)."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         return Response({"queued": True, "after_scan_id": previous}, status=status.HTTP_202_ACCEPTED)
@@ -285,6 +289,10 @@ class StatsView(APIView):
                 "last_successful_scan_at": last_success,
                 "scan_interval_minutes": settings.SCANNER["INTERVAL_MINUTES"],
                 "scan_requested": scan_requested(),
+                "scanners": [
+                    {"id": h.pk, "name": h.name, "status": h.status, "last_checkin": h.last_checkin}
+                    for h in RemoteHost.objects.filter(is_active=True, is_scanner=True)
+                ],
                 "subnet": settings.SCANNER["SUBNET"] or None,
             }
         )
@@ -300,3 +308,68 @@ class MetaView(APIView):
                 "alert_kinds": [{"value": v, "label": l} for v, l in Alert.Kind.choices],
             }
         )
+
+
+# --- Hosts (agents) -----------------------------------------------------------------------
+
+
+class IsBrowserSession(BasePermission):
+    """Secret-issuing actions are only allowed from a logged-in browser session."""
+
+    message = "This action requires a browser session (not an API token)."
+
+    def has_permission(self, request, view):
+        return isinstance(request.successful_authenticator, SessionAuthentication)
+
+
+class RemoteHostViewSet(viewsets.ModelViewSet):
+    """Machines running an agent (metrics and/or LAN scanner). Create/rotate return the token once."""
+
+    serializer_class = RemoteHostSerializer
+    pagination_class = None
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_permissions(self):
+        if self.action in ("create", "rotate_token"):
+            return [IsAuthenticated(), IsBrowserSession()]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        return RemoteHost.objects.prefetch_related("checks").annotate(
+            open_alerts=Count("alerts", filter=Q(alerts__acknowledged=False))
+        )
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        host = RemoteHost(**serializer.validated_data)
+        token = host.set_new_token()
+        host.save()
+        data = self.get_serializer(self.get_queryset().get(pk=host.pk)).data
+        return Response({**data, "token": token}, status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        response.data = self.get_serializer(self.get_queryset().get(pk=kwargs["pk"])).data
+        return response
+
+    @action(detail=True, methods=["post"], url_path="rotate-token")
+    def rotate_token(self, request, pk=None):
+        host = self.get_object()
+        token = host.set_new_token()
+        host.save(update_fields=["token_hash", "token_prefix"])
+        return Response({"id": host.pk, "token_prefix": host.token_prefix, "token": token})
+
+    @action(detail=True, methods=["get"])
+    def events(self, request, pk=None):
+        host = self.get_object()
+        return Response(HostEventSerializer(host.events.all()[:200], many=True).data)
+
+
+class HostCheckViewSet(viewsets.ModelViewSet):
+    serializer_class = HostCheckSerializer
+    pagination_class = None
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_queryset(self):
+        return _filter_params(self.request, HostCheck.objects.select_related("host"), int_params=("host",))

@@ -61,6 +61,9 @@ class ScanRun(models.Model):
     started_at = models.DateTimeField(default=timezone.now)
     finished_at = models.DateTimeField(null=True, blank=True)
     subnet = models.CharField(max_length=43)
+    scanner = models.ForeignKey(
+        "monitoring.RemoteHost", on_delete=models.SET_NULL, null=True, blank=True, related_name="scan_runs"
+    )
     devices_found = models.PositiveIntegerField(default=0)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.RUNNING)
     error = models.TextField(blank=True)

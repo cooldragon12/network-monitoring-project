@@ -83,6 +83,8 @@ def test_base_settings_secure_by_default():
     assert result.stdout.split() == ["False", "True", "True", "True"]
 
 
-def test_scanner_routed_to_dedicated_queue(settings):
-    assert settings.CELERY_TASK_ROUTES["devices.tasks.run_lan_scan"]["queue"] == "scanner"
-    assert settings.CELERY_TASK_DEFAULT_QUEUE == "default"
+def test_beat_schedules_agent_jobs_and_no_scans(settings):
+    tasks = {entry["task"] for entry in settings.CELERY_BEAT_SCHEDULE.values()}
+    assert tasks == {"monitoring.tasks.check_agents", "monitoring.tasks.run_host_checks"}
+    # Scans are driven by the scanner agent over HTTP, never by Celery.
+    assert not hasattr(settings, "CELERY_TASK_ROUTES")
