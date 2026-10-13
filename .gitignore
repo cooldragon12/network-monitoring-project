@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+# Downloaded IEEE OUI database (regenerate with: python -m scanner update-oui)
+scanner/data/oui.csv
