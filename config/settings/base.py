@@ -109,7 +109,10 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
-    "DEFAULT_THROTTLE_RATES": {"login": env_str("LOGIN_THROTTLE_RATE", "10/min")},
+    "DEFAULT_THROTTLE_RATES": {
+        "login": env_str("LOGIN_THROTTLE_RATE", "10/min"),
+        "scan": "6/min",
+    },
 }
 
 # Shared cache (throttling state must be shared across processes).

@@ -103,6 +103,10 @@ the session cookie and CSRF protection just work; no tokens in the browser).
 * API tokens page.
 * Follows the system light/dark theme and `prefers-reduced-motion`; works on phones.
 * Data refreshes every 15 s (live WebSocket updates are Phase 7).
+* **Scan now** queues an immediate scan for the scanner worker (it never runs in
+  the web request) and follows it to a result toast. Duplicate requests while a
+  scan is queued/running are refused; a request the worker doesn't pick up
+  within 2 minutes expires instead of running later.
 
 Every page and API call requires login. Create your account with
 `docker compose exec web python manage.py createsuperuser`.
@@ -140,6 +144,7 @@ stored only as a SHA-256 hash, and can be revoked; tokens cannot create tokens.
 | `alerts/{id}/acknowledge/`, `alerts/acknowledge-all/` | POST | |
 | `events/` | GET | `device=`, `event_type=` |
 | `scans/` | GET | scan runs |
+| `scan/` | POST | queue an immediate scan: `202`, `409` if one is queued/running, `503` if Redis is down; 6/min |
 | `stats/`, `meta/` | GET | dashboard summary, choice lists |
 | `auth/session/`, `auth/login/`, `auth/logout/` | GET/POST | login is rate-limited (`LOGIN_THROTTLE_RATE`, default 10/min) |
 | `tokens/` | GET, POST, DELETE | browser session only |

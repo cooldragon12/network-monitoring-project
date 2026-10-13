@@ -350,3 +350,87 @@ def test_spa_not_built_returns_503(client, settings, tmp_path):
 
 def test_unknown_api_path_is_404_not_spa(api):
     assert api.get("/api/nope/").status_code == 404
+
+
+# --- On-demand scan ----------------------------------------------------------------------
+
+@pytest.fixture
+def queued(monkeypatch):
+    """Capture scan tasks instead of running them (eager mode would scan for real)."""
+    from devices import tasks
+
+    calls = []
+    monkeypatch.setattr(tasks.run_lan_scan, "apply_async", lambda **kw: calls.append(kw))
+    return calls
+
+
+def test_scan_now_queues_task_and_returns_immediately(api, queued):
+    previous = ScanRun.objects.create(subnet="192.168.31.0/24", status="success")
+    resp = api.post("/api/scan/")
+    assert resp.status_code == 202
+    assert resp.json() == {"queued": True, "after_scan_id": previous.id}
+    assert len(queued) == 1
+    assert queued[0]["expires"] > 0
+    assert ScanRun.objects.count() == 1  # nothing ran in the request
+    assert api.get("/api/stats/").json()["scan_requested"] is True
+
+
+def test_scan_now_rejects_duplicates_while_queued(api, queued):
+    assert api.post("/api/scan/").status_code == 202
+    assert api.post("/api/scan/").status_code == 409
+    assert len(queued) == 1
+
+
+def test_scan_now_rejects_while_scan_running(api, queued):
+    ScanRun.objects.create(subnet="192.168.31.0/24", status="running")
+    assert api.post("/api/scan/").status_code == 409
+    assert queued == []
+
+
+def test_scan_now_ignores_stale_running_scan(api, queued):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    ScanRun.objects.create(
+        subnet="192.168.31.0/24", status="running", started_at=timezone.now() - timedelta(minutes=30)
+    )
+    assert api.post("/api/scan/").status_code == 202
+
+
+def test_worker_start_clears_request_flag(api, queued, monkeypatch):
+    from devices import tasks
+
+    api.post("/api/scan/")
+    monkeypatch.setattr(tasks, "scan", lambda subnet, **kw: [])
+    tasks.run_lan_scan()
+    assert api.get("/api/stats/").json()["scan_requested"] is False
+    assert api.post("/api/scan/").status_code == 202
+
+
+def test_scan_now_broker_down(api, monkeypatch):
+    from devices import tasks
+
+    def broker_down(**kwargs):
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(tasks.run_lan_scan, "apply_async", broker_down)
+    assert api.post("/api/scan/").status_code == 503
+    # The flag is released so the user can retry once the broker is back.
+    assert api.get("/api/stats/").json()["scan_requested"] is False
+
+
+def test_scan_now_requires_auth():
+    assert APIClient().post("/api/scan/").status_code == 401
+
+
+def test_scan_now_is_throttled(api, queued, monkeypatch):
+    from devices import tasks
+
+    monkeypatch.setattr(tasks, "scan_in_progress", lambda: False)
+    statuses = []
+    for _ in range(8):
+        cache.delete(tasks.SCAN_REQUEST_KEY)
+        statuses.append(api.post("/api/scan/").status_code)
+    assert statuses[:6] == [202] * 6
+    assert statuses[6:] == [429, 429]

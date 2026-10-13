@@ -1,7 +1,9 @@
 import logging
+from datetime import timedelta
 
 from celery import shared_task
 from django.conf import settings
+from django.core.cache import cache
 from django.utils import timezone
 
 from devices.models import ScanRun
@@ -11,6 +13,43 @@ from scanner.oui import OuiDatabase
 
 logger = logging.getLogger(__name__)
 
+# On-demand scans: a cache flag marks "queued", cleared when the worker starts.
+# The queued task expires with the flag, so a scan requested while the scanner
+# worker is down does not fire much later.
+SCAN_REQUEST_KEY = "lan-scan:requested"
+SCAN_REQUEST_TTL = 120
+# A RUNNING ScanRun older than this is assumed dead (worker crashed mid-scan).
+RUNNING_SCAN_MAX_AGE = timedelta(minutes=5)
+
+
+class ScanAlreadyPending(Exception):
+    pass
+
+
+class ScanQueueUnavailable(Exception):
+    pass
+
+
+def scan_in_progress() -> bool:
+    return ScanRun.objects.filter(
+        status=ScanRun.Status.RUNNING, started_at__gte=timezone.now() - RUNNING_SCAN_MAX_AGE
+    ).exists()
+
+
+def scan_requested() -> bool:
+    return cache.get(SCAN_REQUEST_KEY) is not None
+
+
+def request_lan_scan() -> None:
+    """Queue an immediate scan on the scanner worker (never runs in-process)."""
+    if scan_in_progress() or not cache.add(SCAN_REQUEST_KEY, True, timeout=SCAN_REQUEST_TTL):
+        raise ScanAlreadyPending
+    try:
+        run_lan_scan.apply_async(expires=SCAN_REQUEST_TTL)
+    except Exception as exc:  # broker down / misconfigured
+        cache.delete(SCAN_REQUEST_KEY)
+        raise ScanQueueUnavailable(str(exc)) from exc
+
 
 def _finish(run: ScanRun, status: str, *, devices_found: int = 0, error: str = "") -> None:
     run.status = status
@@ -18,6 +57,14 @@ def _finish(run: ScanRun, status: str, *, devices_found: int = 0, error: str = "
     run.error = error
     run.finished_at = timezone.now()
     run.save(update_fields=["status", "devices_found", "error", "finished_at"])
+
+
+def _start_run(subnet: str) -> ScanRun:
+    run = ScanRun.objects.create(subnet=subnet)
+    # Clear the on-demand flag only once the run is visible, so the dashboard
+    # never sees "not queued" and "no new scan" at the same time.
+    cache.delete(SCAN_REQUEST_KEY)
+    return run
 
 
 def perform_lan_scan() -> dict:
@@ -34,12 +81,12 @@ def perform_lan_scan() -> dict:
             subnet, detected_iface = detect_local_subnet()
         except ScanError as exc:
             logger.error("Subnet auto-detection failed: %s", exc)
-            run = ScanRun.objects.create(subnet="(auto-detect)")
+            run = _start_run("(auto-detect)")
             _finish(run, ScanRun.Status.FAILED, error=str(exc))
             return {"status": run.status, "error": run.error}
         iface = iface or detected_iface
 
-    run = ScanRun.objects.create(subnet=subnet)
+    run = _start_run(subnet)
     try:
         hosts = scan(
             subnet,

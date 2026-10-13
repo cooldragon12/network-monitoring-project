@@ -86,7 +86,13 @@ export interface Stats {
   last_scan: ScanRun | null;
   last_successful_scan_at: string | null;
   scan_interval_minutes: number;
+  scan_requested: boolean;
   subnet: string | null;
+}
+
+export interface ScanQueued {
+  queued: true;
+  after_scan_id: number | null;
 }
 
 export interface Session {

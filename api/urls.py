@@ -15,6 +15,7 @@ urlpatterns = [
     path("auth/login/", views.LoginView.as_view(), name="auth-login"),
     path("auth/logout/", views.LogoutView.as_view(), name="auth-logout"),
     path("stats/", views.StatsView.as_view(), name="stats"),
+    path("scan/", views.ScanNowView.as_view(), name="scan-now"),
     path("meta/", views.MetaView.as_view(), name="meta"),
     path("", include(router.urls)),
 ]

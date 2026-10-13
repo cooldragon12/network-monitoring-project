@@ -5,6 +5,7 @@ import { Link } from "react-router";
 import { useAlerts, useDevices, useMarkKnown, useStats, type DeviceFilters } from "../api/hooks";
 import { AlertList } from "../components/AlertList";
 import { DeviceTable } from "../components/DeviceTable";
+import { ScanButton } from "../components/ScanButton";
 import { AlertTriangleIcon, BellIcon, CheckIcon, RadarIcon, SearchIcon, ShieldIcon } from "../components/icons";
 import { SegmentedControl } from "../components/SegmentedControl";
 import { useToast } from "../components/Toasts";
@@ -136,11 +137,14 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Your network</h1>
-        <div className="mt-1">
-          <ScanStatus />
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Your network</h1>
+          <div className="mt-1">
+            <ScanStatus />
+          </div>
         </div>
+        <ScanButton />
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">

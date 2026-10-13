@@ -25,6 +25,7 @@ from api.serializers import (
 )
 from devices.models import Device, DeviceEvent, ScanRun
 from devices.services import mark_known
+from devices.tasks import ScanAlreadyPending, ScanQueueUnavailable, request_lan_scan, scan_requested
 from monitoring.models import Alert
 
 _TRUE = {"1", "true", "yes"}
@@ -243,6 +244,26 @@ class ScanRunViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = ScanRun.objects.all()
 
 
+class ScanNowView(APIView):
+    """Queue an immediate LAN scan for the scanner worker; returns at once."""
+
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "scan"
+
+    def post(self, request):
+        previous = ScanRun.objects.values_list("id", flat=True).first()
+        try:
+            request_lan_scan()
+        except ScanAlreadyPending:
+            return Response({"detail": "A scan is already queued or running."}, status=status.HTTP_409_CONFLICT)
+        except ScanQueueUnavailable:
+            return Response(
+                {"detail": "Could not reach the task queue (is Redis running?)."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response({"queued": True, "after_scan_id": previous}, status=status.HTTP_202_ACCEPTED)
+
+
 # --- Summary -------------------------------------------------------------------------
 
 
@@ -263,6 +284,7 @@ class StatsView(APIView):
                 "last_scan": ScanRunSerializer(last_scan).data if last_scan else None,
                 "last_successful_scan_at": last_success,
                 "scan_interval_minutes": settings.SCANNER["INTERVAL_MINUTES"],
+                "scan_requested": scan_requested(),
                 "subnet": settings.SCANNER["SUBNET"] or None,
             }
         )

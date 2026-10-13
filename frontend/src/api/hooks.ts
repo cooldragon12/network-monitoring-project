@@ -10,6 +10,7 @@ import type {
   DeviceUpdate,
   Meta,
   Paginated,
+  ScanQueued,
   Session,
   Stats,
 } from "./types";
@@ -64,8 +65,17 @@ export function useLogout() {
 
 // --- Stats / meta ---------------------------------------------------------------------
 
-export function useStats() {
-  return useQuery({ queryKey: keys.stats, queryFn: () => api<Stats>("stats/"), refetchInterval: REFRESH_MS });
+/** ``refetchMs`` lets a component poll faster (React Query uses the shortest interval). */
+export function useStats(refetchMs: number = REFRESH_MS) {
+  return useQuery({ queryKey: keys.stats, queryFn: () => api<Stats>("stats/"), refetchInterval: refetchMs });
+}
+
+export function useScanNow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<ScanQueued>("scan/", { method: "POST" }),
+    onSettled: () => qc.invalidateQueries({ queryKey: keys.stats }),
+  });
 }
 
 export function useMeta() {
