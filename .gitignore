@@ -5,3 +5,4 @@ __pycache__/
 .env
 # Downloaded IEEE OUI database (regenerate with: python -m scanner update-oui)
 scanner/data/oui.csv
+staticfiles/

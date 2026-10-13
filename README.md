@@ -3,7 +3,29 @@
 Self-hosted monitor for **your own** network: discovers LAN devices via ARP and
 alerts on unknown ones, and tracks remote hosts through lightweight agents.
 
-> Status: **Phase 1** — standalone scanner (no Django yet).
+> Status: **Phase 2** — scanner CLI, Django models/admin, Docker Compose.
+
+## Architecture
+
+```
+ Docker Compose (this Mac)                         Native on the Mac (on the LAN)
+ ┌──────────────────────────────────────────┐      ┌───────────────────────────────┐
+ │ web (Django)   worker (queue: default)   │      │ scanner worker (queue: scanner)│
+ │ beat (schedules)                         │◄────►│ needs raw-socket privileges    │
+ │ db (Postgres :5432)  redis (:6379)       │      │ ARP-scans 192.168.31.0/24      │
+ └──────────────────────────────────────────┘      └───────────────────────────────┘
+        db/redis/web are published on 127.0.0.1 only
+```
+
+Scans run only in the `scanner` Celery queue, never inside a web request.
+Docker Desktop on macOS cannot see the LAN at layer 2, so the scanner worker
+runs natively. On a Linux host, `docker compose --profile linux-scanner up`
+runs it in a container instead (`network_mode: host` + `NET_RAW`/`NET_ADMIN`).
+
+**Double NAT note:** this network sits behind a Xiaomi router (192.168.31.1),
+which itself sits behind the main router (192.168.1.1). ARP does not cross
+routers, so devices on 192.168.1.0/24 are invisible from here. To monitor that
+segment, run a second scanner on a machine connected to it.
 
 ## Setup
 
@@ -11,7 +33,20 @@ alerts on unknown ones, and tracks remote hosts through lightweight agents.
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m scanner update-oui   # downloads IEEE vendor DB (a few MB) to scanner/data/oui.csv
+
+cp .env.example .env                     # then fill in DJANGO_SECRET_KEY and POSTGRES_PASSWORD
+                                         # (and the same password inside DATABASE_URL)
+docker compose up -d --build
+docker compose exec web python manage.py createsuperuser
 ```
+
+Admin: <http://127.0.0.1:8000/admin/>. For plain-HTTP local development set
+`DJANGO_DEBUG=true` and `DJANGO_SECURE_COOKIES=false` in `.env`; production
+defaults are DEBUG off and secure cookies on.
+
+All configuration is via environment variables; see `.env.example`. Native
+processes (`manage.py`, the scanner worker) read `.env` automatically; real
+environment variables take precedence.
 
 ## Scanner CLI
 
@@ -53,5 +88,6 @@ needs the same privileges.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest
+.venv/bin/python -m pytest          # in-memory SQLite by default
+TEST_DATABASE_URL=postgres://netmon:PASSWORD@localhost:5432/netmon .venv/bin/python -m pytest
 ```
