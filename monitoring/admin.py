@@ -1,6 +1,8 @@
 from django.contrib import admin, messages
 
 from monitoring.models import Alert, RemoteHost
+from monitoring.notifications import enabled_channels
+from monitoring.tasks import send_alert_via_channel
 
 
 def _show_token_once(request, host, token):
@@ -12,13 +14,27 @@ def _show_token_once(request, host, token):
 
 @admin.register(Alert)
 class AlertAdmin(admin.ModelAdmin):
-    list_display = ("created_at", "kind", "severity", "subject_display", "acknowledged", "notified")
-    list_filter = ("acknowledged", "kind", "severity", "notified")
+    list_display = ("created_at", "kind", "severity", "subject_display", "acknowledged", "notified", "suppressed")
+    list_filter = ("acknowledged", "kind", "severity", "notified", "suppressed")
     search_fields = ("message", "device__mac", "device__ip", "device__label", "remote_host__name")
     date_hierarchy = "created_at"
     list_select_related = ("device", "remote_host")
-    readonly_fields = ("device", "remote_host", "kind", "severity", "message", "created_at", "acknowledged_at", "notified")
-    actions = ["acknowledge_selected"]
+    readonly_fields = (
+        "device",
+        "remote_host",
+        "kind",
+        "severity",
+        "message",
+        "created_at",
+        "acknowledged_at",
+        "notified",
+        "notified_at",
+        "notified_channels",
+        "suppressed",
+        "notify_attempts",
+        "notify_error",
+    )
+    actions = ["acknowledge_selected", "send_notification_now"]
 
     @admin.display(description="Subject")
     def subject_display(self, obj):
@@ -31,6 +47,19 @@ class AlertAdmin(admin.ModelAdmin):
             alert.acknowledge()
             count += 1
         self.message_user(request, f"Acknowledged {count} alert(s).")
+
+    @admin.action(description="Send notification now (ignores cooldown)")
+    def send_notification_now(self, request, queryset):
+        channels = enabled_channels()
+        if not channels:
+            self.message_user(request, "No notification channels are enabled.", messages.ERROR)
+            return
+        for alert in queryset:
+            # Explicit resend: clear prior delivery state so every channel sends again.
+            Alert.objects.filter(pk=alert.pk).update(notified_channels=[], suppressed=False)
+            for channel in channels:
+                send_alert_via_channel.delay(alert.pk, channel)
+        self.message_user(request, f"Queued {queryset.count()} alert(s) on {', '.join(channels)}.")
 
     def has_add_permission(self, request):
         return False

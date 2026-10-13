@@ -3,7 +3,7 @@
 Self-hosted monitor for **your own** network: discovers LAN devices via ARP and
 alerts on unknown ones, and tracks remote hosts through lightweight agents.
 
-> Status: **Phase 3** — scheduled LAN scanning and new-device alerts.
+> Status: **Phase 4** — scanning, new-device alerts, ntfy notifications.
 
 ## Architecture
 
@@ -11,10 +11,10 @@ alerts on unknown ones, and tracks remote hosts through lightweight agents.
  Docker Compose (this Mac)                         Native on the Mac (on the LAN)
  ┌──────────────────────────────────────────┐      ┌───────────────────────────────┐
  │ web (Django)   worker (queue: default)   │      │ scanner worker (queue: scanner)│
- │ beat (schedules)                         │◄────►│ needs raw-socket privileges    │
+ │ beat (schedules)  ntfy (:8080)           │◄────►│ needs raw-socket privileges    │
  │ db (Postgres :5432)  redis (:6379)       │      │ ARP-scans 192.168.31.0/24      │
  └──────────────────────────────────────────┘      └───────────────────────────────┘
-        db/redis/web are published on 127.0.0.1 only
+   db/redis on 127.0.0.1 only; web/ntfy on WEB_BIND/NTFY_BIND (default 127.0.0.1)
 ```
 
 Scans run only in the `scanner` Celery queue, never inside a web request.
@@ -88,6 +88,61 @@ acknowledges their open new-device alerts.
 
 The scanning machine itself never appears in results (it does not ARP-reply to
 itself).
+
+## Notifications (self-hosted ntfy)
+
+The Compose stack includes an [ntfy](https://ntfy.sh) server with
+`auth-default-access: deny-all`, so nothing can read or publish without an
+account. One-time setup (each `user add` prompts for a password):
+
+```bash
+docker compose up -d ntfy
+# Publisher used by this app: write-only on the topic, authenticates by token
+docker compose exec ntfy ntfy user add netmon-publisher
+docker compose exec ntfy ntfy access netmon-publisher netmon-alerts write-only
+docker compose exec ntfy ntfy token add netmon-publisher      # copy the tk_... token
+# Your phone: read-only on the topic
+docker compose exec ntfy ntfy user add phone
+docker compose exec ntfy ntfy access phone netmon-alerts read-only
+```
+
+Then in `.env` set `NOTIFY_NTFY_ENABLED=true` and `NOTIFY_NTFY_TOKEN=tk_...`,
+run `docker compose up -d`, and send a test message:
+
+```bash
+docker compose exec web python manage.py send_test_notification
+```
+
+In the ntfy phone app, add a subscription to topic `netmon-alerts` on server
+`NTFY_PUBLIC_URL` (e.g. `http://192.168.31.234:8080`) and log in as `phone`.
+
+* **iPhone:** iOS only delivers instantly via Apple push, which ntfy routes
+  through ntfy.sh. Set `NTFY_UPSTREAM_BASE_URL=https://ntfy.sh`; only a
+  content-free "poll" nudge goes out, and the message itself is fetched from
+  your server.
+* **Away from home:** ntfy and the dashboard are LAN-only, so your phone gets
+  alerts only on home Wi-Fi unless you add Tailscale/WireGuard (Phase 6 notes).
+* **Static IP:** links and the ntfy server use this Mac's LAN IP. Reserve it
+  in the Xiaomi router's DHCP settings so it doesn't change.
+
+Behaviour:
+
+| Alert | ntfy priority |
+|---|---|
+| `new_device` (warning) | 4 (high) |
+| `new_random_mac` (info) | 2 (low); disable with `NOTIFY_RANDOM_MAC=false` |
+| `host_offline` (critical, Phase 6) | 5 (max) |
+
+* Each alert is sent once per channel, after it is committed to the database.
+  Notifications link to the device page (`SITE_URL`).
+* **Cooldown:** a repeat alert of the same kind for the same device/host within
+  `NOTIFY_COOLDOWN_MINUTES` (default 60) is marked *suppressed* and not sent.
+* **Retry:** network errors, HTTP 5xx and 429 are retried up to 5 times with
+  exponential backoff (30 s, 60 s, ... capped at 15 min). Auth/config errors
+  (4xx) fail at once; see the alert's `notify_error` in the admin.
+* Admin action **Send notification now** resends selected alerts, ignoring the cooldown.
+* Email works the same way: `NOTIFY_EMAIL_ENABLED=true`, `NOTIFY_EMAIL_TO`,
+  and the SMTP `EMAIL_*` settings.
 
 ## Scanner CLI
 

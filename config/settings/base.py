@@ -175,3 +175,26 @@ CELERY_BEAT_SCHEDULE = {
         "options": {"expires": _scan_interval.total_seconds()},
     },
 }
+
+# --- Notifications -------------------------------------------------------------------
+
+# Base URL used for links in notifications (must be reachable from your phone).
+SITE_URL = env_str("SITE_URL", "http://127.0.0.1:8000")
+
+NOTIFICATIONS = {
+    # Repeat alerts of the same kind for the same device/host within this window are not sent.
+    "COOLDOWN_MINUTES": env_int("NOTIFY_COOLDOWN_MINUTES", 60),
+    # Send (low-priority) notifications for new randomized-MAC devices.
+    "RANDOM_MAC": env_bool("NOTIFY_RANDOM_MAC", True),
+    "NTFY": {
+        "ENABLED": env_bool("NOTIFY_NTFY_ENABLED", False),
+        "URL": env_str("NOTIFY_NTFY_URL", "http://127.0.0.1:8080"),
+        "TOPIC": env_str("NOTIFY_NTFY_TOPIC", "netmon-alerts"),
+        "TOKEN": env_str("NOTIFY_NTFY_TOKEN", ""),
+        "TIMEOUT": 10,
+    },
+    "EMAIL": {
+        "ENABLED": env_bool("NOTIFY_EMAIL_ENABLED", False),
+        "TO": env_list("NOTIFY_EMAIL_TO"),
+    },
+}

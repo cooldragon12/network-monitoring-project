@@ -85,7 +85,13 @@ class Alert(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
     acknowledged = models.BooleanField(default=False)
     acknowledged_at = models.DateTimeField(null=True, blank=True)
-    notified = models.BooleanField(default=False)
+    # Notification delivery state.
+    notified = models.BooleanField(default=False, help_text="Delivered on at least one channel")
+    notified_at = models.DateTimeField(null=True, blank=True)
+    notified_channels = models.JSONField(default=list, blank=True)
+    suppressed = models.BooleanField(default=False, help_text="Not sent: duplicate within cooldown")
+    notify_attempts = models.PositiveIntegerField(default=0)
+    notify_error = models.TextField(blank=True)
 
     class Meta:
         ordering = ["-created_at"]

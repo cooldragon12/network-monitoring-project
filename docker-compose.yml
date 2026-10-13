@@ -11,6 +11,7 @@ x-app: &app
   environment:
     DATABASE_URL: postgres://${POSTGRES_USER:-netmon}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-netmon}
     CELERY_BROKER_URL: redis://redis:6379/0
+    NOTIFY_NTFY_URL: http://ntfy:80
   volumes:
     - .:/app
   depends_on:
@@ -54,8 +55,34 @@ services:
   web:
     <<: *app
     command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
+    # WEB_BIND=127.0.0.1 keeps it local; set it to this machine's LAN IP to
+    # open it from your phone (still login-only; use HTTPS beyond the LAN).
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${WEB_BIND:-127.0.0.1}:8000:8000"
+
+  ntfy:
+    image: binwiederhier/ntfy:v2.11.0
+    command: serve
+    environment:
+      NTFY_BASE_URL: ${NTFY_PUBLIC_URL:-http://127.0.0.1:8080}
+      NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
+      NTFY_AUTH_FILE: /var/lib/ntfy/auth.db
+      # Nobody can read or publish without an account/token.
+      NTFY_AUTH_DEFAULT_ACCESS: deny-all
+      NTFY_ENABLE_LOGIN: "true"
+      # Optional, iOS only: relay a content-free "poll" nudge via ntfy.sh so
+      # iPhones get instant push. Leave empty to keep everything local.
+      NTFY_UPSTREAM_BASE_URL: ${NTFY_UPSTREAM_BASE_URL:-}
+    volumes:
+      - ntfy:/var/lib/ntfy
+    ports:
+      - "${NTFY_BIND:-127.0.0.1}:8080:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 -O - http://localhost:80/v1/health | grep -q '\"healthy\":true'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
 
   worker:
     <<: *app
@@ -75,7 +102,9 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-netmon}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@127.0.0.1:5432/${POSTGRES_DB:-netmon}
       CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      NOTIFY_NTFY_URL: http://127.0.0.1:8080
     command: celery -A config worker -Q scanner -c 1 -l info
 
 volumes:
   pgdata:
+  ntfy:
